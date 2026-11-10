@@ -44,6 +44,15 @@ summary{cursor:pointer;color:var(--muted);font-size:14px}
 code{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:12px}
 .best{font-size:12px;color:var(--warn)}
 .aibox{margin-top:16px;padding:14px;border-radius:12px;background:#58a6ff12;border:1px solid #58a6ff55;font-size:14px}
+.subjects{display:flex;flex-wrap:wrap;gap:8px}
+.subj{padding:8px 12px;font-size:14px;border-radius:999px}
+.subj small{background:var(--bg);border-radius:999px;padding:1px 7px;margin-left:4px;color:var(--muted)}
+.subj.on{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:650}
+.subj.on small{background:#06210f22;color:var(--accent-ink)}
+.subj.add{border-style:dashed;color:var(--muted)}
+.subjtools{margin-top:8px}
+.subjtools button{padding:5px 10px;font-size:13px}
+.cur{color:var(--accent)}
 .aibox.first{margin:0 0 16px}
 .aibox p{margin:6px 0 10px;color:var(--muted)}
 .aibox pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font:12.5px/1.5 ui-monospace,Consolas,monospace;margin:0 0 10px;max-height:190px;overflow:auto}
@@ -97,7 +106,13 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 
 <main>
   <section class="card">
-    <h2>1 · Tus apuntes</h2>
+    <h2>📁 Tus materias</h2>
+    <div class="subjects" id="subjects"></div>
+    <div class="row subjtools">
+      <button id="renSubj">✏️ Renombrar</button>
+      <button id="delSubj">🗑️ Borrar materia</button>
+    </div>
+    <h2 style="margin-top:20px">1 · Apuntes de <span id="curName" class="cur"></span></h2>
     <div class="aibox first">
       <b>🤖 Recomendación: pídele a una IA que te genere las preguntas</b>
       <p>Las preguntas automáticas a veces quedan raras. Para mejores preguntas, sube tus apuntes a una IA (Claude, ChatGPT, Gemini…) con este mensaje, copia lo que te responda y pégalo en el cuadro de abajo.</p>
@@ -142,6 +157,7 @@ Reglas:
 
   <section class="card">
     <h2>2 · Elige un juego</h2>
+    <p class="status" id="playingWith" style="margin:-4px 0 12px"></p>
     <div class="games">
       <button class="game" data-game="zombie">
         <span class="ico">🧟</span>
@@ -440,11 +456,54 @@ function generateQuestions(raw) {
 }
 
 /* ============ estado y menú ============ */
-let QUESTIONS = store.get('ej_questions', []);
+// Materias (carpetas): cada una con sus apuntes y preguntas
+let SUBJECTS = store.get('ej_subjects', null);
+if (!SUBJECTS || !SUBJECTS.length) { // migra lo que había antes a una primera materia
+  SUBJECTS = [{ id: 's' + Date.now(), name: 'Mi materia', notes: store.get('ej_notes', ''), questions: store.get('ej_questions', []) }];
+}
+let CUR = SUBJECTS.find(s => s.id === store.get('ej_current', '')) || SUBJECTS[0];
+let QUESTIONS = CUR.questions;
+const saveSubjects = () => { store.set('ej_subjects', SUBJECTS); store.set('ej_current', CUR.id); };
+saveSubjects();
 const notesEl = $('#notes'), statusEl = $('#status');
-notesEl.value = store.get('ej_notes', '');
+notesEl.value = CUR.notes || '';
+let notesTimer;
+notesEl.addEventListener('input', () => { clearTimeout(notesTimer); notesTimer = setTimeout(() => { CUR.notes = notesEl.value; saveSubjects(); }, 400); });
 function setStatus(msg, cls = '') { statusEl.textContent = msg; statusEl.className = 'status ' + cls; }
+function renderSubjects() {
+  $('#subjects').innerHTML = SUBJECTS.map(s =>
+    `<button class="subj${s === CUR ? ' on' : ''}" data-sid="${s.id}">📁 ${esc(s.name)} <small>${s.questions.length}</small></button>`).join('') +
+    '<button class="subj add" id="addSubj">＋ Nueva materia</button>';
+  $('#curName').textContent = CUR.name;
+  $('#playingWith').innerHTML = `Jugando con <b>📁 ${esc(CUR.name)}</b> · ${QUESTIONS.length} preguntas`;
+}
+function selectSubject(s) {
+  CUR.notes = notesEl.value; CUR = s; QUESTIONS = CUR.questions; deck = [];
+  notesEl.value = CUR.notes || ''; saveSubjects(); setStatus(QUESTIONS.length ? `${QUESTIONS.length} preguntas listas en ${CUR.name}.` : '', 'ok'); renderQuestions();
+}
+$('#subjects').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'addSubj') {
+    const name = (prompt('Nombre de la nueva materia (ej: Romano II, Historia, Biología):') || '').trim();
+    if (!name) return;
+    const s = { id: 's' + Date.now(), name: name.slice(0, 40), notes: '', questions: [] };
+    SUBJECTS.push(s); selectSubject(s); setStatus(`📁 Materia "${s.name}" creada. Ahora carga sus apuntes o preguntas.`, 'ok');
+    return;
+  }
+  const s = SUBJECTS.find(x => x.id === b.dataset.sid); if (s && s !== CUR) selectSubject(s);
+});
+$('#renSubj').onclick = () => {
+  const name = (prompt('Nuevo nombre para la materia:', CUR.name) || '').trim();
+  if (name) { CUR.name = name.slice(0, 40); saveSubjects(); renderQuestions(); }
+};
+$('#delSubj').onclick = () => {
+  if (!confirm(`¿Borrar la materia "${CUR.name}" con sus ${QUESTIONS.length} preguntas? No se puede deshacer.`)) return;
+  SUBJECTS = SUBJECTS.filter(s => s !== CUR);
+  if (!SUBJECTS.length) SUBJECTS.push({ id: 's' + Date.now(), name: 'Mi materia', notes: '', questions: [] });
+  CUR = SUBJECTS[0]; selectSubject(CUR); setStatus('Materia borrada.', 'ok');
+};
 function renderQuestions() {
+  renderSubjects();
   const n = QUESTIONS.length;
   document.querySelectorAll('.game').forEach(b => b.disabled = !n);
   $('#noQTip').style.display = n ? 'none' : '';
@@ -456,20 +515,23 @@ function renderQuestions() {
 }
 $('#qlist').addEventListener('click', e => {
   const i = e.target.dataset.del; if (i == null) return;
-  QUESTIONS.splice(+i, 1); store.set('ej_questions', QUESTIONS); renderQuestions(); setStatus(`${QUESTIONS.length} preguntas listas.`, 'ok');
+  QUESTIONS.splice(+i, 1); saveSubjects(); renderQuestions(); setStatus(`${QUESTIONS.length} preguntas listas.`, 'ok');
 });
 function generate() {
   const t = notesEl.value.trim();
-  store.set('ej_notes', t);
-  if (t.length < 40) { setStatus('Agrega un poco más de texto en tus apuntes.', 'err'); return; }
-  QUESTIONS = generateQuestions(t);
-  store.set('ej_questions', QUESTIONS); deck = [];
+  CUR.notes = t;
+  if (t.length < 40) { saveSubjects(); setStatus('Agrega un poco más de texto en tus apuntes.', 'err'); return; }
+  QUESTIONS = CUR.questions = generateQuestions(t);
+  saveSubjects(); deck = [];
   if (!QUESTIONS.length) setStatus('No pude sacar preguntas de este texto. Prueba con apuntes más largos o con definiciones.', 'err');
-  else setStatus(`✅ ${QUESTIONS.length} preguntas generadas. ¡Elige un juego!`, 'ok');
+  else setStatus(`✅ ${QUESTIONS.length} preguntas generadas en 📁 ${CUR.name}. ¡Elige un juego!`, 'ok');
   renderQuestions();
 }
 $('#genBtn').onclick = generate;
-$('#clearBtn').onclick = () => { notesEl.value = ''; QUESTIONS = []; store.set('ej_notes', ''); store.set('ej_questions', []); setStatus(''); renderQuestions(); };
+$('#clearBtn').onclick = () => {
+  if (QUESTIONS.length && !confirm(`¿Borrar los apuntes y las ${QUESTIONS.length} preguntas de "${CUR.name}"?`)) return;
+  notesEl.value = ''; CUR.notes = ''; QUESTIONS = CUR.questions = []; saveSubjects(); setStatus(''); renderQuestions();
+};
 $('#copyPrompt').onclick = async () => {
   const b = $('#copyPrompt'), t = $('#aiPrompt').textContent;
   try { await navigator.clipboard.writeText(t); }
