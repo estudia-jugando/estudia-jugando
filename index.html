@@ -247,6 +247,7 @@ Reglas:
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
 <script>
 /* ============ utilidades ============ */
 const $ = s => document.querySelector(s);
@@ -487,8 +488,12 @@ const FB_CONFIG = {
   projectId: 'estudia-jugando',
   storageBucket: 'estudia-jugando.firebasestorage.app',
   messagingSenderId: '585985652111',
-  appId: '1:585985652111:web:39e35df83ab28c015107fa'
+  appId: '1:585985652111:web:39e35df83ab28c015107fa',
+  measurementId: 'G-DFZ85FESTQ'
 };
+// Estadísticas de uso: solo se ven en la consola de Firebase (Analytics), nunca en la página
+let fa = null;
+function track(name, params = {}) { try { if (fa) fa.logEvent(name, params); } catch (e) {} }
 let fbUser = null, fdb = null, cloudTimer = null, cloudReady = false;
 const deletedIds = new Set();
 function setSync(t) { const el = $('#syncState'); if (el) el.textContent = t; }
@@ -507,7 +512,7 @@ function renderAccount() {
 }
 async function login() {
   const provider = new firebase.auth.GoogleAuthProvider();
-  try { await firebase.auth().signInWithPopup(provider); }
+  try { await firebase.auth().signInWithPopup(provider); track('login', { method: 'google' }); }
   catch (e) {
     if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request'].includes(e.code)) return firebase.auth().signInWithRedirect(provider);
     if (e.code === 'auth/popup-closed-by-user') return;
@@ -524,6 +529,8 @@ function initFirebase() {
   try {
     firebase.initializeApp(FB_CONFIG);
     fdb = firebase.firestore(); fdb.settings({ ignoreUndefinedProperties: true, merge: true });
+    const isLocal = !location.hostname || ['localhost', '127.0.0.1'].includes(location.hostname); // las pruebas locales no cuentan como visitas
+    if (firebase.analytics && !isLocal) firebase.analytics.isSupported().then(ok => { if (ok) fa = firebase.analytics(); }).catch(() => {});
     firebase.auth().onAuthStateChanged(async u => {
       fbUser = u; cloudReady = false; renderAccount();
       if (u) await cloudLoad();
@@ -703,6 +710,7 @@ function answer(k) {
   clearInterval(qState.timer);
   const { q, i } = qState, ok = k === q.answer;
   qState.answered = true; qState.result = ok;
+  track('pregunta_respondida', { juego: gameKind || '', correcta: ok ? 1 : 0, tipo: q.kind || '' });
   document.querySelectorAll('.opt').forEach((b, j) => { b.disabled = true; if (j === q.answer) b.classList.add('ok'); else if (j === k) b.classList.add('bad'); });
   $('#qVerdict').textContent = ok ? '✅ ¡Correcto!' : (k === -1 ? '⏰ ¡Se acabó el tiempo!' : '❌ Incorrecto');
   $('#qVerdict').style.color = ok ? 'var(--accent)' : 'var(--danger)';
@@ -769,6 +777,7 @@ function startGame(kind) {
   $('#gameScreen').classList.add('on'); $('#endModal').classList.remove('on');
   resize(); clearInput(); $('#optBtn').hidden = true;
   game = new GAMES[kind]();
+  track('juego_iniciado', { juego: kind, preguntas: QUESTIONS.length });
   const help = $('#help'); help.classList.remove('hide'); clearTimeout(startGame.ht);
   startGame.ht = setTimeout(() => help.classList.add('hide'), 8000);
 }
@@ -781,6 +790,7 @@ function stopGame() {
 function endGame(g, title) {
   if (game !== g) return;
   g.over = true; g.score = Math.floor(g.score);
+  track('juego_terminado', { juego: gameKind, puntaje: g.score, correctas: g.ok, incorrectas: g.bad });
   const best = store.get('ej_best', {}); const prev = best[gameKind] || 0;
   if (g.score > prev) { best[gameKind] = g.score; store.set('ej_best', best); cloudSave(); }
   $('#endTitle').textContent = title;
