@@ -145,7 +145,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <div class="aibox first">
       <b>🤖 Recomendación: pídele a una IA que te genere las preguntas</b>
       <p>Las preguntas automáticas a veces quedan raras. Para mejores preguntas, sube tus apuntes a una IA (Claude, ChatGPT, Gemini…) con este mensaje, copia lo que te responda y pégalo en el cuadro de abajo.</p>
-      <pre id="aiPrompt">Actúa como profesor. Con el material que te adjunto, crea 30 preguntas de examen de alternativas en español, variadas (conceptos, fechas, nombres, clasificaciones y ejemplos).
+      <pre id="aiPrompt">Actúa como profesor. Con el material que te adjunto, crea 60 preguntas de examen de alternativas en español, variadas (conceptos, fechas, nombres, clasificaciones y ejemplos).
 
 Escríbelas con este formato exacto, sin numerarlas, sin negritas ni tablas, dejando una línea en blanco entre cada pregunta:
 P: ¿pregunta?
@@ -614,10 +614,16 @@ async function cloudLoad() {
     store.set('ej_best', best);
     if (ud.story) { // modo historia: se junta lo de la nube con lo de este dispositivo
       const cs = ud.story;
-      STORY.coins = Math.max(STORY.coins || 0, cs.coins || 0);
-      STORY.owned = [...new Set([...(cs.owned || []), ...STORY.owned])];
-      STORY.house = cs.house || STORY.house;
-      STORY.zones = Object.assign({}, STORY.zones, cs.zones || {});
+      if ((cs.resetAt || 0) !== (STORY.resetAt || 0)) {
+        // alguien empezó de cero: manda la versión con el reinicio más reciente
+        if ((cs.resetAt || 0) > (STORY.resetAt || 0)) Object.assign(STORY, cs);
+      } else {
+        STORY.coins = Math.max(STORY.coins || 0, cs.coins || 0);
+        STORY.owned = [...new Set([...(cs.owned || []), ...STORY.owned])];
+        STORY.house = cs.house || STORY.house;
+        STORY.zones = Object.assign({}, STORY.zones, cs.zones || {});
+        STORY.lastDay = [STORY.lastDay, cs.lastDay].filter(Boolean).sort().pop() || null;
+      }
       store.set('ej_story', STORY);
     }
     SUBJECTS = merged;
@@ -925,7 +931,12 @@ function startGame(kind, opts = {}) {
 function awardCoins(g) {
   if (!STORY_RUN || !g || g.meta || g.awarded) return 0;
   g.awarded = true;
-  const n = Math.floor(Math.floor(g.score) / 40) + (g.ok || 0) * 2;
+  // pocas fichas por partida (máx. 40) para que la casa sea un progreso de días
+  let n = Math.min(40, Math.floor(Math.floor(g.score) / 120) + (g.ok || 0) * 2);
+  // bono diario: la primera partida de cada día da +20 extra
+  const today = new Date().toISOString().slice(0, 10);
+  g.dailyBonus = 0;
+  if (n > 0 && STORY.lastDay !== today) { STORY.lastDay = today; g.dailyBonus = 20; n += 20; }
   if (n > 0) { STORY.coins += n; saveStory(); }
   return n;
 }
@@ -959,7 +970,7 @@ function endGame(g, title) {
   $('#endTitle').textContent = title;
   $('#endScore').textContent = g.score; $('#endOk').textContent = g.ok; $('#endBad').textContent = g.bad;
   $('#endBest').textContent = g.score > prev ? '🏆 ¡Nuevo récord!' : `Récord: ${prev}`;
-  $('#endCoins').textContent = STORY_RUN ? `🪙 +${coins} fichas para tu casa (tienes ${STORY.coins})` : '';
+  $('#endCoins').textContent = STORY_RUN ? `🪙 +${coins} fichas para tu casa${g.dailyBonus ? ` (incluye 🎁 bono diario +${g.dailyBonus})` : ''} · tienes ${STORY.coins}` : '';
   $('#menuBtn').textContent = STORY_RUN ? '🗺️ Volver al mapa' : 'Volver al menú';
   $('#endModal').classList.add('on');
 }
@@ -2869,23 +2880,24 @@ const HOUSES = [
   { id: 'piramide', name: 'Pirámide', icon: '🔺' }, { id: 'iglu', name: 'Iglú', icon: '❄️' }, { id: 'arbol', name: 'Casa del árbol', icon: '🌳' }
 ];
 const SHOP = [
-  { id: 'techo', name: 'Arreglar el techo', cost: 20, icon: '🛠️', cat: 'arreglos' },
-  { id: 'puerta', name: 'Puerta nueva', cost: 25, icon: '🚪', cat: 'arreglos' },
-  { id: 'ventanas', name: 'Ventanas nuevas', cost: 30, icon: '🪟', cat: 'arreglos' },
-  { id: 'paredes', name: 'Reparar grietas', cost: 35, icon: '🧱', cat: 'arreglos' },
-  { id: 'pintura', name: 'Pintura nueva', cost: 45, icon: '🎨', cat: 'arreglos' },
-  { id: 'flores', name: 'Jardín de flores', cost: 25, icon: '🌷', cat: 'deco' },
-  { id: 'arbolito', name: 'Árbol', cost: 30, icon: '🌳', cat: 'deco' },
-  { id: 'farol', name: 'Farol', cost: 35, icon: '🏮', cat: 'deco' },
-  { id: 'cerca', name: 'Cerca de madera', cost: 40, icon: '🪵', cat: 'deco' },
-  { id: 'bandera', name: 'Bandera de Chile', cost: 40, icon: '🚩', cat: 'deco' },
-  { id: 'gato', name: 'Gato', cost: 50, icon: '🐈', cat: 'deco' },
-  { id: 'perro', name: 'Perro', cost: 55, icon: '🐕', cat: 'deco' },
-  { id: 'resbalin', name: 'Resbalín', cost: 65, icon: '🛝', cat: 'deco' },
-  { id: 'fuente', name: 'Fuente', cost: 80, icon: '⛲', cat: 'deco' },
-  { id: 'auto', name: 'Auto', cost: 120, icon: '🚗', cat: 'deco' },
-  { id: 'piscina', name: 'Piscina', cost: 150, icon: '🏊', cat: 'deco' },
-  { id: 'estatua', name: 'Trofeo gigante de oro', cost: 250, icon: '🏆', cat: 'deco' }
+  // precios pensados para que arreglar todo tome días de estudio (≈ 4.000 fichas en total)
+  { id: 'techo', name: 'Arreglar el techo', cost: 60, icon: '🛠️', cat: 'arreglos' },
+  { id: 'puerta', name: 'Puerta nueva', cost: 90, icon: '🚪', cat: 'arreglos' },
+  { id: 'ventanas', name: 'Ventanas nuevas', cost: 120, icon: '🪟', cat: 'arreglos' },
+  { id: 'paredes', name: 'Reparar grietas', cost: 160, icon: '🧱', cat: 'arreglos' },
+  { id: 'pintura', name: 'Pintura nueva', cost: 220, icon: '🎨', cat: 'arreglos' },
+  { id: 'flores', name: 'Jardín de flores', cost: 80, icon: '🌷', cat: 'deco' },
+  { id: 'arbolito', name: 'Árbol', cost: 100, icon: '🌳', cat: 'deco' },
+  { id: 'farol', name: 'Farol', cost: 120, icon: '🏮', cat: 'deco' },
+  { id: 'cerca', name: 'Cerca de madera', cost: 150, icon: '🪵', cat: 'deco' },
+  { id: 'bandera', name: 'Bandera de Chile', cost: 170, icon: '🚩', cat: 'deco' },
+  { id: 'gato', name: 'Gato', cost: 200, icon: '🐈', cat: 'deco' },
+  { id: 'perro', name: 'Perro', cost: 220, icon: '🐕', cat: 'deco' },
+  { id: 'resbalin', name: 'Resbalín', cost: 260, icon: '🛝', cat: 'deco' },
+  { id: 'fuente', name: 'Fuente', cost: 320, icon: '⛲', cat: 'deco' },
+  { id: 'auto', name: 'Auto', cost: 420, icon: '🚗', cat: 'deco' },
+  { id: 'piscina', name: 'Piscina', cost: 550, icon: '🏊', cat: 'deco' },
+  { id: 'estatua', name: 'Trofeo gigante de oro', cost: 900, icon: '🏆', cat: 'deco' }
 ];
 const owns = id => STORY.owned.includes(id);
 const housePct = () => Math.round(STORY.owned.length / SHOP.length * 100);
@@ -3175,7 +3187,7 @@ GAMES.house = class {
     } else {
       const items = SHOP.filter(i => i.cat === this.tab);
       el.innerHTML = `<div class="sp-row" style="margin-bottom:8px"><div class="subjects"><button class="subj${this.tab === 'arreglos' ? ' on' : ''}" data-tab="arreglos">🛠️ Arreglos</button><button class="subj${this.tab === 'deco' ? ' on' : ''}" data-tab="deco">🌷 Decoración</button></div>
-        <div><b>🪙 ${STORY.coins}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button></div></div>
+        <div><b>🪙 ${STORY.coins}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button> <button data-reset style="padding:4px 10px;font-size:12px">🔄 Empezar de cero</button></div></div>
         <div class="sp-grid">${items.map(i => { const have = owns(i.id), can = STORY.coins >= i.cost;
           return `<button class="sp-item${have ? ' have' : ''}" data-buy="${i.id}" ${have || !can ? 'disabled' : ''}><span class="sp-ico">${i.icon}</span>${i.name}<small>${have ? '✔ Comprado' : '🪙 ' + i.cost}</small></button>`; }).join('')}</div>`;
     }
@@ -3184,6 +3196,11 @@ GAMES.house = class {
       if (b.dataset.house) { STORY.house = b.dataset.house; saveStory(); this.flash = { text: '🎉 ¡Este es tu nuevo hogar! Arréglalo con tus fichas', t: 3 }; }
       else if (b.dataset.tab) this.tab = b.dataset.tab;
       else if (b.hasAttribute('data-change')) { STORY.house = null; saveStory(); }
+      else if (b.hasAttribute('data-reset')) {
+        if (!confirm('¿Empezar tu hogar de cero? Se borran tus fichas y todo lo que compraste (también en tu cuenta). No se puede deshacer.')) return;
+        Object.assign(STORY, { house: null, coins: 0, owned: [], lastDay: null, resetAt: Date.now() }); saveStory();
+        this.flash = { text: '🔄 Empezaste de cero. ¡A ganar fichas!', t: 2.5 };
+      }
       else if (b.dataset.buy) {
         const it = SHOP.find(i => i.id === b.dataset.buy);
         if (it && !owns(it.id) && STORY.coins >= it.cost) { STORY.coins -= it.cost; STORY.owned.push(it.id); saveStory(); this.flash = { text: `${it.icon} ¡Compraste ${it.name}!`, t: 2.2 }; track('compra_casa', { item: it.id }); }
