@@ -648,7 +648,8 @@ async function cloudSaveNow() {
   } catch (e) { console.warn(e); setSync('⚠️ No se pudo guardar (' + (e.code || 'error') + ')'); }
 }
 /* ============ ranking ============ */
-const GAME_NAMES = { zombie: '🧟 Zombies', catch: '🧺 Atrapa', maze: '👾 Laberinto', runner: '🏃 Carrera', penal: '⚽ Penales', review: '📚 Repaso' };
+const GAME_NAMES = { zombie: '🧟 Zombies', catch: '🧺 Atrapa', maze: '👾 Laberinto', runner: '🏃 Carrera', penal: '⚽ Penales', review: '📚 Repaso',
+  forest: '🌲 Bosque', garden: '🍎 Huerto', basket: '🏀 Básquetbol', rugby: '🏉 Rugby', trap: '🚧 Trampas' };
 function rankName() { // nombre + inicial del apellido, para no mostrar el nombre completo
   const p = (fbUser.displayName || (fbUser.email || 'Jugador').split('@')[0]).trim().split(/\s+/);
   return p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}.` : p[0];
@@ -681,7 +682,7 @@ async function showRanking() {
     const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     const val = r => rankTab === 'total' ? (r.bestSum || 0) : ((r.best || {})[rankTab] || 0);
     const medal = i => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
-    const note = rankTab === 'total' ? '<p class="status" style="margin:0 0 10px">⭐ Total = suma de tu mejor puntaje en cada uno de los 6 juegos. ¡Juega todos para subir!</p>' : `<p class="status" style="margin:0 0 10px">Mejor puntaje en ${GAME_NAMES[rankTab]}</p>`;
+    const note = rankTab === 'total' ? '<p class="status" style="margin:0 0 10px">⭐ Total = suma de tu mejor puntaje en cada juego (minijuegos y modo historia). ¡Juega todos para subir!</p>' : `<p class="status" style="margin:0 0 10px">Mejor puntaje en ${GAME_NAMES[rankTab]}</p>`;
     list.innerHTML = rows.length ? rows.filter(r => val(r) > 0).map((r, i) =>
       `<div class="rank${r.id === fbUser.uid ? ' me' : ''}"><span class="pos">${medal(i)}</span><span class="nm">${esc(r.name || 'Jugador')}${r.id === fbUser.uid ? ' (tú)' : ''}</span><b>${val(r).toLocaleString('es-CL')}</b></div>`).join('')
       : '';
@@ -882,9 +883,13 @@ const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX -
 window.addEventListener('mousemove', e => { if (!game) return; Object.assign(mouse, pos(e)); mouse.mt = performance.now(); });
 cv.addEventListener('mousedown', e => { Object.assign(mouse, pos(e)); mouse.down = true; mouse.tap = true; });
 window.addEventListener('mouseup', () => mouse.down = false);
-cv.addEventListener('touchstart', e => { e.preventDefault(); touch.active = true; touch.tap = true; Object.assign(touch, pos(e.touches[0])); touch.sx = touch.x; touch.sy = touch.y; }, { passive: false });
-cv.addEventListener('touchmove', e => { e.preventDefault(); Object.assign(touch, pos(e.touches[0])); }, { passive: false });
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+touch.pts = []; // todos los dedos en pantalla (para botones simultáneos)
+const setPts = e => { touch.pts = [...e.touches].map(t => pos(t)); };
+cv.addEventListener('touchstart', e => { e.preventDefault(); setPts(e); touch.active = true; touch.tap = true; Object.assign(touch, pos(e.changedTouches[0])); touch.sx = touch.x; touch.sy = touch.y; }, { passive: false });
+cv.addEventListener('touchmove', e => { e.preventDefault(); setPts(e); Object.assign(touch, pos(e.touches[0])); }, { passive: false });
 cv.addEventListener('touchend', e => {
+  setPts(e);
   if (e.touches.length) return;
   touch.active = false;
   const dx = touch.x - touch.sx, dy = touch.y - touch.sy; // deslizar: 0 arriba, 1 derecha, 2 abajo, 3 izquierda
@@ -2274,6 +2279,588 @@ GAMES.penal = class {
   }
 };
 
+/* ============ JUEGOS EXCLUSIVOS DEL MODO HISTORIA ============ */
+// generador aleatorio con semilla (para repetir el mismo nivel al morir)
+const seeded = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+function drawWolf(c, x, y, r, a, t, fast) {
+  c.save(); c.translate(x, y); c.rotate(a);
+  const run = Math.sin(t * 14) * r * 0.25, fur = fast ? '#6b6f78' : r > 15 ? '#4a4d55' : '#8a8f99';
+  c.fillStyle = fur; c.strokeStyle = '#1b1e2b'; c.lineWidth = 1.5;
+  for (const s of [-1, 1]) for (const f of [0.6, -0.7]) { c.beginPath(); c.ellipse(r * f + (f > 0 ? run : -run) * s, s * r * 0.55, r * 0.25, r * 0.12, 0, 0, 7); c.fill(); }
+  c.beginPath(); c.moveTo(-r * 1.1, 0); c.quadraticCurveTo(-r * 1.9, Math.sin(t * 8) * r * 0.5, -r * 2.1, 0); c.lineWidth = r * 0.35; c.strokeStyle = fur; c.stroke();
+  c.lineWidth = 1.5; c.strokeStyle = '#1b1e2b';
+  c.beginPath(); c.ellipse(0, 0, r * 1.15, r * 0.62, 0, 0, 7); c.fill(); c.stroke();
+  c.beginPath(); c.ellipse(r * 1.15, 0, r * 0.55, r * 0.45, 0, 0, 7); c.fill(); c.stroke();
+  c.beginPath(); c.moveTo(r * 1.55, -r * 0.15); c.lineTo(r * 1.95, 0); c.lineTo(r * 1.55, r * 0.15); c.fill();
+  for (const s of [-1, 1]) { c.beginPath(); c.moveTo(r * 0.9, s * r * 0.25); c.lineTo(r * 0.75, s * r * 0.65); c.lineTo(r * 1.15, s * r * 0.35); c.fill(); }
+  c.restore();
+}
+function banner2(c, b, y = 46) { // aviso centrado reutilizable
+  if (!b) return;
+  c.globalAlpha = Math.min(1, b.t * 2); c.font = 'bold 19px system-ui'; c.textAlign = 'center';
+  const tw = Math.min(W - 16, c.measureText(b.text).width + 30);
+  c.fillStyle = '#000b'; c.beginPath(); c.roundRect(W / 2 - tw / 2, y - 26, tw, 38, 19); c.fill();
+  c.fillStyle = b.ok === false ? '#ff8a8a' : '#ffd23f'; c.fillText(b.text, W / 2, y); c.globalAlpha = 1;
+}
+function powerBar(c, x, y, h, p, label = 'POTENCIA') {
+  const bw = 20, g = c.createLinearGradient(0, y + h, 0, y);
+  g.addColorStop(0, '#ff6b6b'); g.addColorStop(0.45, '#ffe066'); g.addColorStop(0.75, '#2ecc71'); g.addColorStop(1, '#27ae60');
+  c.fillStyle = '#000a'; c.beginPath(); c.roundRect(x - 6, y - 24, bw + 12, h + 32, 8); c.fill();
+  c.fillStyle = g; c.fillRect(x, y, bw, h); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(x, y, bw, h);
+  const my = y + h * (1 - p); c.fillStyle = '#fff'; c.fillRect(x - 3, my - 2, bw + 6, 4);
+  c.font = '700 10px system-ui'; c.textAlign = 'center'; c.fillText(label, x + bw / 2, y - 9);
+}
+
+/* ---- 1. Bosque: escapar con solo 5 balas ---- */
+GAMES.forest = class {
+  constructor() {
+    this.level = 1; this.score = 0; this.lives = 3; this.ok = 0; this.bad = 0; this.time = 0; this.pk = {};
+    $('#help').textContent = 'Llega a la SALIDA (arriba). Mover: WASD / flechas o mantén el dedo. Disparar: clic o toca un lobo (o ESPACIO al más cercano). ¡Solo 5 balas por nivel!';
+    this.build();
+  }
+  build() {
+    this.L = H * (2.4 + this.level * 0.7);
+    this.p = { x: W / 2, y: this.L - 60, r: 13, a: -Math.PI / 2, inv: 2 };
+    this.ammo = 5; this.wolves = []; this.bullets = []; this.parts = []; this.spawnT = 2.5; this.camY = this.L - H;
+    const rnd = seeded(this.level * 977 + 13); this.trees = [];
+    const n = Math.floor(this.L / H * (W / 30 + this.level * 4));
+    for (let i = 0; i < n * 3 && this.trees.length < n; i++) {
+      const t = { x: rnd() * W, y: 110 + rnd() * (this.L - 280), r: 18 + rnd() * 18, k: rnd() };
+      if (!this.trees.some(o => Math.hypot(o.x - t.x, o.y - t.y) < (o.r + t.r) * 0.55 + 30)) this.trees.push(t);
+    }
+    this.bushes = [...Array(Math.floor(this.L / 25))].map(() => ({ x: rnd() * W, y: rnd() * this.L, r: 6 + rnd() * 8 }));
+    this.leaves = [...Array(Math.floor(this.L / 8))].map(() => ({ x: rnd() * W, y: rnd() * this.L, c: rnd() }));
+    this.banner = { text: `🌲 Nivel ${this.level}: ¡escapa del bosque! · 🔫 5 balas`, t: 3 };
+  }
+  hud() { return `<span>${hearts(this.lives)}</span><span>Nivel ${this.level}</span><span>⭐ ${this.score}</span><span>🔫 ${'●'.repeat(this.ammo)}${'○'.repeat(5 - this.ammo)}</span><span>🚪 a ${Math.max(0, Math.round(this.p.y / 12))} m</span>`; }
+  shootAt(tx, ty) {
+    if (this.ammo <= 0) { this.banner = { text: '¡Sin balas! Corre hacia la salida 🏃', t: 1.4, ok: false }; return; }
+    this.ammo--; const p = this.p, a = Math.atan2(ty - p.y, tx - p.x); p.a = a;
+    this.bullets.push({ x: p.x, y: p.y, vx: Math.cos(a) * 720, vy: Math.sin(a) * 720, t: 0.8 });
+    this.flash = 0.08;
+  }
+  update(dt) {
+    this.time += dt; const p = this.p; p.inv -= dt; this.flash = Math.max(0, (this.flash || 0) - dt);
+    let dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0), dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+    if (touch.tap) { const wx = touch.x, wy = touch.y + this.camY, hit = this.wolves.find(w => Math.hypot(w.x - wx, w.y - wy) < 48); if (hit) this.shootAt(hit.x, hit.y); touch.tap = false; }
+    if (touch.active) { const tx = touch.x - p.x, ty = touch.y + this.camY - p.y, d = Math.hypot(tx, ty); if (d > 24) { dx = tx / d; dy = ty / d; } }
+    if (mouse.tap) { this.shootAt(mouse.x, mouse.y + this.camY); mouse.tap = false; }
+    const sp = keys[' '], was = this.pk.s; this.pk.s = sp;
+    if (sp && !was) { let near = null, nd = 380; for (const w of this.wolves) { const d = Math.hypot(w.x - p.x, w.y - p.y); if (d < nd) { nd = d; near = w; } } if (near) this.shootAt(near.x, near.y); }
+    const len = Math.hypot(dx, dy) || 1;
+    if (dx || dy) { p.x += dx / len * 205 * dt; p.y += dy / len * 205 * dt; if (!this.bullets.length) p.a = Math.atan2(dy, dx); p.walk = (p.walk || 0) + dt; }
+    for (const t of this.trees) { const d = Math.hypot(p.x - t.x, p.y - t.y), m = t.r * 0.55 + p.r; if (d < m && d > 0) { p.x = t.x + (p.x - t.x) / d * m; p.y = t.y + (p.y - t.y) / d * m; } }
+    p.x = Math.max(p.r, Math.min(W - p.r, p.x)); p.y = Math.max(20, Math.min(this.L - 20, p.y));
+    this.camY += (Math.max(0, Math.min(this.L - H, p.y - H * 0.62)) - this.camY) * Math.min(1, dt * 6);
+    this.spawnT -= dt;
+    if (this.spawnT <= 0 && this.wolves.length < 2 + this.level) {
+      this.spawnT = Math.max(1.1, 3.4 - this.level * 0.35) * rand(0.7, 1.3);
+      const side = Math.random() < 0.5 ? -40 : W + 40, top = Math.random() < 0.35;
+      this.wolves.push({ x: top ? rand(30, W - 30) : side, y: top ? this.camY - 40 : this.camY + rand(0.05, 0.75) * H, r: 13, sp: 125 + this.level * 14 + rand(0, 30), fast: Math.random() < 0.2, a: 0 });
+    }
+    for (const b of this.bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.t -= dt; }
+    for (const w of this.wolves) {
+      w.a = Math.atan2(p.y - w.y, p.x - w.x); const s = w.sp * (w.fast ? 1.3 : 1);
+      w.x += Math.cos(w.a) * s * dt; w.y += Math.sin(w.a) * s * dt;
+      for (const b of this.bullets) if (b.t > 0 && Math.hypot(b.x - w.x, b.y - w.y) < w.r + 8) { b.t = 0; w.dead = true; this.score += 40; this.boom(w.x, w.y); }
+    }
+    this.wolves = this.wolves.filter(w => !w.dead); this.bullets = this.bullets.filter(b => b.t > 0);
+    for (const q of this.parts) { q.x += q.vx * dt; q.y += q.vy * dt; q.t -= dt; } this.parts = this.parts.filter(q => q.t > 0);
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (p.y < 80) { // llegaste a la salida
+      this.score += 200 * this.level + this.ammo * 40; this.level++; this.build();
+      this.banner = { text: `🎉 ¡Escapaste! +bono por balas guardadas · Nivel ${this.level}`, t: 3 }; return;
+    }
+    if (p.inv <= 0) for (const w of this.wolves) if (Math.hypot(w.x - p.x, w.y - p.y) < w.r + p.r) return this.caught(w);
+  }
+  boom(x, y) { for (let i = 0; i < 14; i++) { const a = rand(0, 6.3), s = rand(40, 180); this.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, t: rand(0.3, 0.6) }); } }
+  async caught(w) {
+    this.paused = true; clearInput();
+    const r = await askQuestion({ title: '🐺 ¡Un lobo te alcanzó!', sub: 'Responde bien para espantarlo', time: 25 });
+    if (r === null || game !== this) return;
+    this.wolves = this.wolves.filter(x => x !== w);
+    if (r) { this.ok++; this.score += 50; this.banner = { text: '💪 ¡Lo espantaste!', t: 1.2 }; }
+    else { this.bad++; this.lives--; if (this.lives <= 0) return endGame(this, '🐺 Los lobos te atraparon en el bosque'); this.banner = { text: `Te mordió… quedan ${this.lives} vidas`, t: 1.6, ok: false }; }
+    this.p.inv = 1.8; clearInput(); this.paused = false;
+  }
+  draw() {
+    const c = ctx, p = this.p, cy = this.camY;
+    c.fillStyle = '#20391f'; c.fillRect(0, 0, W, H);
+    c.save(); c.translate(0, -cy);
+    for (const l of this.leaves) if (l.y > cy - 10 && l.y < cy + H + 10) { c.fillStyle = l.c > 0.66 ? '#5a4a2a' : l.c > 0.33 ? '#2f4f2a' : '#3d5e30'; c.fillRect(l.x, l.y, 4, 3); }
+    for (const b of this.bushes) if (b.y > cy - 20 && b.y < cy + H + 20) { c.fillStyle = '#2b5a2b'; c.beginPath(); c.arc(b.x, b.y, b.r, 0, 7); c.arc(b.x + b.r * 0.8, b.y + 2, b.r * 0.7, 0, 7); c.fill(); }
+    // salida: camino y letrero
+    c.fillStyle = '#b08a5a'; c.fillRect(0, 0, W, 70); c.fillStyle = '#c9a66b'; c.fillRect(W / 2 - 40, 0, 80, 110);
+    c.fillStyle = '#7a4a2b'; c.fillRect(W / 2 + 60, 30, 8, 60); c.fillStyle = '#9c6b3c'; c.beginPath(); c.roundRect(W / 2 + 20, 20, 120, 30, 6); c.fill();
+    c.fillStyle = '#fff'; c.font = 'bold 14px system-ui'; c.textAlign = 'center'; c.fillText('SALIDA ⬆', W / 2 + 80, 41);
+    for (const t of this.trees) if (t.y > cy - 60 && t.y < cy + H + 60) { c.fillStyle = '#0005'; c.beginPath(); c.arc(t.x + 6, t.y + 8, t.r * 1.15, 0, 7); c.fill(); }
+    // jugador (visto desde arriba, con arma)
+    if (!(p.inv > 0 && Math.floor(this.time * 10) % 2)) {
+      c.save(); c.translate(p.x, p.y); c.rotate(p.a); c.scale(1.35, 1.35);
+      c.fillStyle = '#333'; c.fillRect(8, 3, 18, 5);
+      const st = Math.sin((p.walk || 0) * 14) * 4;
+      c.fillStyle = '#2d3a5c'; c.beginPath(); c.ellipse(-2 + st, -6, 6, 4, 0, 0, 7); c.ellipse(-2 - st, 6, 6, 4, 0, 0, 7); c.fill();
+      c.fillStyle = '#e07a2f'; c.strokeStyle = '#1b1e2b'; c.lineWidth = 1.5; c.beginPath(); c.ellipse(0, 0, 9, 14, 0, 0, 7); c.fill(); c.stroke();
+      c.fillStyle = '#6b4226'; c.beginPath(); c.arc(0, 0, 7.5, 0, 7); c.fill(); c.stroke();
+      c.restore();
+    }
+    for (const w of this.wolves) drawWolf(c, w.x, w.y, w.r, w.a, this.time + w.x, w.fast);
+    c.fillStyle = '#ffe27a'; for (const b of this.bullets) { c.beginPath(); c.arc(b.x, b.y, 3, 0, 7); c.fill(); }
+    c.fillStyle = '#ffd23f'; for (const q of this.parts) { c.globalAlpha = q.t * 2; c.fillRect(q.x, q.y, 3, 3); } c.globalAlpha = 1;
+    for (const t of this.trees) if (t.y > cy - 60 && t.y < cy + H + 60) { // copas encima
+      for (const [ox, oy, k] of [[0, 0, 1.15], [-t.r * 0.35, -t.r * 0.3, 0.7], [t.r * 0.3, -t.r * 0.25, 0.6]]) {
+        const g = c.createRadialGradient(t.x + ox - t.r * 0.3, t.y + oy - t.r * 0.3, 2, t.x + ox, t.y + oy, t.r * k);
+        g.addColorStop(0, t.k > 0.5 ? '#4f8f3e' : '#3f7d3a'); g.addColorStop(1, t.k > 0.5 ? '#244a22' : '#1d3f1f'); c.fillStyle = g;
+        c.beginPath(); c.arc(t.x + ox, t.y + oy, t.r * k, 0, 7); c.fill();
+      }
+    }
+    c.restore();
+    // oscuridad del bosque con luz alrededor del jugador
+    const sx = p.x, sy = p.y - cy, dark = c.createRadialGradient(sx, sy, 90, sx, sy, Math.max(W, H) * 0.6);
+    dark.addColorStop(0, 'rgba(0,10,0,0)'); dark.addColorStop(1, `rgba(0,10,0,${this.flash > 0 ? 0.35 : 0.72})`); c.fillStyle = dark; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#ffd23f'; for (const w of this.wolves) { const ey = w.y - cy; for (const s of [-1, 1]) { c.beginPath(); c.arc(w.x + Math.cos(w.a + s * 0.35) * w.r * 1.4, ey + Math.sin(w.a + s * 0.35) * w.r * 1.4, 2.2, 0, 7); c.fill(); } }
+    if (p.y - cy > 0) { c.fillStyle = '#ffffffb0'; c.font = 'bold 13px system-ui'; c.textAlign = 'center'; c.fillText('⬆ salida', W / 2, 24); }
+    banner2(c, this.banner, H - 40);
+  }
+};
+
+/* ---- 2. Huerto: dispárale a los conejos antes de que se coman la fruta ---- */
+GAMES.garden = class {
+  constructor() {
+    this.score = 0; this.ok = 0; this.bad = 0; this.time = 0; this.wave = 1; this.shot = 0; this.reload = 0; this.reloadTime = 1.25;
+    this.aim = { x: W / 2, y: H / 2 }; this.rabbits = []; this.spawnT = 1.5; this.fx = []; this.pk = {}; this.busy = false;
+    const fruits = ['🍎', '🍓', '🥕', '🍇', '🍅', '🍐'];
+    this.plants = fruits.map((f, i) => ({ f, alive: true, i }));
+    this.layout();
+    $('#help').textContent = 'Dispárale a los conejos: clic o toque sobre ellos (o mueve la mira con flechas y ESPACIO). Cada tiro tarda en recargar. Si un conejo llega a una fruta, responde para salvarla.';
+    this.banner = { text: '🐰 ¡Protege tu huerto!', t: 2.5 };
+  }
+  layout() { this.plants.forEach((p, i) => { p.x = W * (0.2 + (i % 3) * 0.3); p.y = H * (0.5 + Math.floor(i / 3) * 0.22); }); }
+  onResize() { this.layout(); }
+  get lives() { return this.plants.filter(p => p.alive).length; }
+  hud() { return `<span>🍓 ${this.lives}/6 frutas</span><span>Oleada ${this.wave}</span><span>⭐ ${this.score}</span><span>${this.reload > 0 ? '🔄 recargando…' : '🔫 listo'}</span>`; }
+  fire(x, y) {
+    if (this.reload > 0) return;
+    this.reload = this.reloadTime; this.fx.push({ x, y, t: 0.25 });
+    let hit = null, hd = 30; for (const r of this.rabbits) { if (r.flee || r.dead) continue; const d = Math.hypot(r.x - x, r.y - 10 - y); if (d < hd) { hd = d; hit = r; } }
+    if (hit) {
+      hit.dead = true; hit.vy = -260; hit.vx = rand(-80, 80); this.score += 25 * this.wave; this.shot++;
+      if (this.shot % 8 === 0) { this.wave++; this.reloadTime = Math.max(0.85, this.reloadTime - 0.05); this.banner = { text: `🐰🐰 Oleada ${this.wave}: ¡más conejos!`, t: 2 }; }
+    }
+  }
+  update(dt) {
+    this.time += dt; this.reload = Math.max(0, this.reload - dt);
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (mouse.mt) { this.aim.x = mouse.x; this.aim.y = mouse.y; }
+    this.aim.x += ((keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0)) * 420 * dt;
+    this.aim.y += ((keys.arrowdown || keys.s ? 1 : 0) - (keys.arrowup || keys.w ? 1 : 0)) * 420 * dt;
+    if (mouse.tap) { this.fire(mouse.x, mouse.y); mouse.tap = false; }
+    if (touch.tap) { this.aim.x = touch.x; this.aim.y = touch.y; this.fire(touch.x, touch.y); touch.tap = false; }
+    const sp = keys[' '], was = this.pk.s; this.pk.s = sp; if (sp && !was) this.fire(this.aim.x, this.aim.y);
+    this.spawnT -= dt;
+    if (this.spawnT <= 0 && this.rabbits.filter(r => !r.dead && !r.flee).length < 2 + this.wave) {
+      this.spawnT = Math.max(0.7, 2.6 - this.wave * 0.22) * rand(0.7, 1.3);
+      const left = Math.random() < 0.5;
+      this.rabbits.push({ x: left ? -30 : W + 30, y: rand(H * 0.35, H * 0.92), sp: 45 + this.wave * 9 + rand(0, 20), ph: rand(0, 6), col: Math.random() < 0.5 ? '#f2f2f2' : '#b08a5a' });
+    }
+    for (const r of this.rabbits) {
+      if (r.dead) { r.x += r.vx * dt; r.y += r.vy * dt; r.vy += 700 * dt; continue; }
+      if (r.flee) { r.x += r.dir * 260 * dt; continue; }
+      let tgt = null, td = 1e9; for (const p of this.plants) if (p.alive) { const d = Math.hypot(p.x - r.x, p.y - r.y); if (d < td) { td = d; tgt = p; } }
+      if (!tgt) continue;
+      const hop = Math.max(0, Math.sin(this.time * 9 + r.ph)); r.hop = hop;
+      const a = Math.atan2(tgt.y - r.y, tgt.x - r.x); r.dir = Math.cos(a) >= 0 ? 1 : -1;
+      r.x += Math.cos(a) * r.sp * (0.4 + hop) * dt; r.y += Math.sin(a) * r.sp * (0.4 + hop) * dt;
+      if (td < 22 && !this.busy) return this.eat(r, tgt);
+    }
+    this.rabbits = this.rabbits.filter(r => r.x > -60 && r.x < W + 60 && r.y < H + 80);
+    for (const f of this.fx) f.t -= dt; this.fx = this.fx.filter(f => f.t > 0);
+  }
+  async eat(r, plant) {
+    this.busy = true; this.paused = true; clearInput();
+    const res = await askQuestion({ title: `🐰 ¡Un conejo se está comiendo tu ${plant.f}!`, sub: 'Responde bien para espantarlo y salvar la fruta', time: 25 });
+    if (res === null || game !== this) return;
+    r.flee = true; r.dir = r.x < W / 2 ? -1 : 1;
+    if (res) { this.ok++; this.score += 40; this.banner = { text: `✅ ¡Salvaste ${plant.f}!`, t: 1.4 }; }
+    else { this.bad++; plant.alive = false; this.banner = { text: `😢 Se comió ${plant.f}`, t: 1.6, ok: false }; }
+    this.busy = false; clearInput(); this.paused = false;
+    if (!this.lives) endGame(this, '🐰 Los conejos se comieron todo el huerto');
+  }
+  draw() {
+    const c = ctx;
+    let g = c.createLinearGradient(0, 0, 0, H * 0.3); g.addColorStop(0, '#7ec8ff'); g.addColorStop(1, '#cdeeff'); c.fillStyle = g; c.fillRect(0, 0, W, H * 0.3);
+    g = c.createLinearGradient(0, H * 0.28, 0, H); g.addColorStop(0, '#7cc66b'); g.addColorStop(1, '#4f9e4a'); c.fillStyle = g; c.fillRect(0, H * 0.28, W, H);
+    c.fillStyle = '#8a5a35'; for (let y = H * 0.4; y < H; y += H * 0.11) { c.globalAlpha = 0.35; c.fillRect(0, y, W, H * 0.04); } c.globalAlpha = 1;
+    c.fillStyle = '#c9925a'; c.fillRect(0, H * 0.27, W, 8); for (let x = 10; x < W; x += 36) c.fillRect(x, H * 0.22, 8, H * 0.08);
+    for (const p of this.plants) {
+      c.fillStyle = '#0003'; c.beginPath(); c.ellipse(p.x, p.y + 14, 30, 8, 0, 0, 7); c.fill();
+      if (p.alive) {
+        c.fillStyle = '#2f7d32'; for (const [ox, oy] of [[-14, 0], [14, 0], [0, -12], [0, 6]]) { c.beginPath(); c.arc(p.x + ox, p.y + oy, 15, 0, 7); c.fill(); }
+        c.fillStyle = '#000'; c.font = `30px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText(p.f, p.x, p.y + 10);
+      } else { c.fillStyle = '#6b4a2b'; c.beginPath(); c.ellipse(p.x, p.y + 8, 18, 7, 0, 0, 7); c.fill(); c.fillStyle = '#8a7b4a'; c.fillRect(p.x - 2, p.y - 6, 4, 12); }
+    }
+    for (const r of [...this.rabbits].sort((a, b) => a.y - b.y)) { // conejos
+      const by = r.y - (r.hop || 0) * 12;
+      c.save(); c.translate(r.x, by); c.scale((r.dir || 1) * 1.45, 1.45); if (r.dead) c.rotate(this.time * 10);
+      c.fillStyle = '#0003'; if (!r.dead) { c.beginPath(); c.ellipse(0, (r.hop || 0) * 12 + 12, 14, 4, 0, 0, 7); c.fill(); }
+      c.fillStyle = r.col; c.strokeStyle = '#3a2a1e'; c.lineWidth = 1.5;
+      c.beginPath(); c.ellipse(0, 0, 15, 11, 0, 0, 7); c.fill(); c.stroke();
+      c.beginPath(); c.arc(-14, -1, 4, 0, 7); c.fillStyle = '#fff'; c.fill(); c.stroke();
+      c.fillStyle = r.col; c.beginPath(); c.ellipse(12, -8, 8, 7, 0, 0, 7); c.fill(); c.stroke();
+      for (const s of [0, 5]) { c.beginPath(); c.ellipse(9 + s, -22, 3.2, 10, 0.15 * (s ? 1 : -1), 0, 7); c.fill(); c.stroke(); }
+      c.fillStyle = '#f7a1b5'; c.beginPath(); c.ellipse(9, -22, 1.3, 6, -0.15, 0, 7); c.fill();
+      c.fillStyle = '#111'; c.beginPath(); c.arc(15, -10, 1.8, 0, 7); c.fill();
+      c.fillStyle = '#f7a1b5'; c.beginPath(); c.arc(19.5, -7, 1.6, 0, 7); c.fill();
+      c.restore();
+    }
+    for (const f of this.fx) { c.fillStyle = `rgba(255,220,120,${f.t * 4})`; c.beginPath(); c.arc(f.x, f.y, 26 * (1 - f.t * 3), 0, 7); c.fill(); }
+    // mira con anillo de recarga
+    const a = this.aim, rl = this.reload / this.reloadTime;
+    c.strokeStyle = rl > 0 ? '#ffffff80' : '#ff3b3b'; c.lineWidth = 2.5; c.beginPath(); c.arc(a.x, a.y, 16, 0, 7); c.stroke();
+    c.beginPath(); c.moveTo(a.x - 24, a.y); c.lineTo(a.x - 8, a.y); c.moveTo(a.x + 8, a.y); c.lineTo(a.x + 24, a.y); c.moveTo(a.x, a.y - 24); c.lineTo(a.x, a.y - 8); c.moveTo(a.x, a.y + 8); c.lineTo(a.x, a.y + 24); c.stroke();
+    if (rl > 0) { c.strokeStyle = '#ffd23f'; c.lineWidth = 4; c.beginPath(); c.arc(a.x, a.y, 21, -Math.PI / 2, -Math.PI / 2 + (1 - rl) * Math.PI * 2); c.stroke(); }
+    banner2(c, this.banner, 40);
+  }
+};
+
+/* ---- 3. Estadio: encestar en básquetbol (arrastra hacia atrás y suelta) ---- */
+GAMES.basket = class {
+  constructor() {
+    this.score = 0; this.lives = 3; this.ok = 0; this.bad = 0; this.time = 0; this.made = 0; this.pk = {};
+    $('#help').textContent = 'Arrastra desde cualquier parte hacia ATRÁS y suelta para lanzar (como una honda). Teclado: ←/→ ángulo, ↑/↓ fuerza, ESPACIO lanza. Si fallas, responde para no perder vida.';
+    this.ang = -0.95; this.pow = 0.62; this.setup();
+  }
+  get u() { return H / 10; }
+  setup() {
+    const u = this.u, lvl = this.made;
+    this.floor = H * 0.9; this.hx = W * 0.8;
+    this.baseRim = this.floor - u * 4.2 + rand(-1, 1) * u * Math.min(1, lvl * 0.15);
+    this.sx = Math.max(W * 0.08, W * (0.42 - lvl * 0.035)); this.sy = this.floor - u * 2;
+    this.ball = { x: this.sx, y: this.sy, vx: 0, vy: 0, flying: false, t: 0, scored: false };
+    this.moving = lvl >= 5; this.drag = null;
+    this.banner = { text: lvl ? `🏀 Tiro ${lvl + 1}: más lejos` : '🏀 Arrastra hacia atrás y suelta para lanzar', t: 2.5 };
+  }
+  get rimY() { return this.baseRim + (this.moving ? Math.sin(this.time * 1.3) * this.u * 0.9 : 0); }
+  onResize() { this.setup(); }
+  hud() { return `<span>${hearts(this.lives)}</span><span>🏀 ${this.made} encestes</span><span>⭐ ${this.score}</span>`; }
+  launch(vx, vy) { const b = this.ball; Object.assign(b, { vx, vy, flying: true, t: 0, scored: false }); this.drag = null; }
+  update(dt) {
+    this.time += dt; const b = this.ball, u = this.u;
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (!b.flying) {
+      const ptr = touch.active ? touch : mouse, down = mouse.down || touch.active;
+      if (down && !this.drag) this.drag = { x: ptr.x, y: ptr.y };
+      if (this.drag) {
+        this.drag.cx = ptr.x; this.drag.cy = ptr.y;
+        if (!down) { const vx = (this.drag.x - this.drag.cx) * 4.2, vy = (this.drag.y - this.drag.cy) * 4.2; if (Math.hypot(vx, vy) > 120) this.launch(Math.max(-1500, Math.min(1500, vx)), Math.max(-1500, Math.min(1500, vy))); else this.drag = null; }
+      }
+      this.ang += ((keys.arrowleft ? -1 : 0) + (keys.arrowright ? 1 : 0)) * dt * 0.9; this.ang = Math.max(-1.45, Math.min(-0.2, this.ang));
+      this.pow += ((keys.arrowup ? 1 : 0) - (keys.arrowdown ? 1 : 0)) * dt * 0.5; this.pow = Math.max(0.2, Math.min(1, this.pow));
+      const sp = keys[' '], was = this.pk.s; this.pk.s = sp;
+      if (sp && !was) { const v = 450 + this.pow * 900; this.launch(Math.cos(this.ang) * v, Math.sin(this.ang) * v); }
+      mouse.tap = false; touch.tap = false; return;
+    }
+    // física de la pelota con aro y tablero
+    const g = u * 9.8, r = u * 0.24, rimY = this.rimY, rw = u * 0.46, F = { x: this.hx - rw, y: rimY }, B = { x: this.hx + rw, y: rimY };
+    const bx = this.hx + rw + u * 0.18, steps = 4;
+    for (let k = 0; k < steps; k++) {
+      const h = dt / steps, py = b.y;
+      b.vy += g * h; b.x += b.vx * h; b.y += b.vy * h; b.t += h;
+      for (const P of [F, B]) { const dx = b.x - P.x, dy = b.y - P.y, d = Math.hypot(dx, dy); if (d < r && d > 0) { const nx = dx / d, ny = dy / d, vn = b.vx * nx + b.vy * ny; if (vn < 0) { b.vx -= 1.6 * vn * nx; b.vy -= 1.6 * vn * ny; } b.x = P.x + nx * r; b.y = P.y + ny * r; } }
+      if (b.x + r > bx && b.x < bx + 10 && b.y > rimY - u * 1.3 && b.y < rimY + u * 0.25 && b.vx > 0) { b.x = bx - r; b.vx *= -0.6; }
+      if (!b.scored && py < rimY && b.y >= rimY && b.x > F.x + r * 0.3 && b.x < B.x - r * 0.3 && b.vy > 0) { b.scored = true; this.swish = 0.6; }
+      if (b.y + r > this.floor) { b.y = this.floor - r; b.vy *= -0.55; b.vx *= 0.8; }
+    }
+    this.swish = Math.max(0, (this.swish || 0) - dt);
+    if (b.scored && b.t > 0.9 || b.t > 4 || b.x > W + 60 || b.x < -60 || (Math.abs(b.vy) < 30 && b.y > this.floor - r - 2 && b.t > 1)) this.result(b.scored);
+  }
+  async result(ok) {
+    if (this.resolving) return; this.resolving = true;
+    if (ok) {
+      this.made++; this.score += 100 + this.made * 20; this.banner = { text: '🏀 ¡ENCESTASTE!', t: 1.6 };
+      this.resolving = false; return this.setup();
+    }
+    this.paused = true; clearInput();
+    const r = await askQuestion({ title: '🏀 ¡Fallaste el tiro!', sub: 'Responde bien para no perder una vida', time: 25 });
+    if (r === null || game !== this) return;
+    if (r) { this.ok++; this.score += 30; } else { this.bad++; this.lives--; }
+    this.resolving = false; this.paused = false; clearInput();
+    if (this.lives <= 0) return endGame(this, '🏀 Se acabó el partido');
+    const keep = this.made; this.setup(); this.made = keep;
+    this.banner = { text: r ? '✅ ¡Sigues! Otro intento' : `💔 Te quedan ${this.lives} vidas`, t: 1.6, ok: !!r };
+  }
+  draw() {
+    const c = ctx, u = this.u, b = this.ball, rimY = this.rimY, rw = u * 0.46, r = u * 0.24;
+    let g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1b2238'); g.addColorStop(0.6, '#2c3556'); g.addColorStop(1, '#1b2238'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    for (let i = 0; i < 220; i++) { const hx = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1, hy = Math.abs(Math.sin(i * 78.233) * 12345.678) % 1; c.fillStyle = ['#ff6b6b66', '#58a6ff66', '#ffd23f66', '#ffffff50'][i % 4]; c.fillRect(hx * W, H * 0.08 + hy * H * 0.42, 5, 6); }
+    g = c.createLinearGradient(0, this.floor, 0, H); g.addColorStop(0, '#d9a066'); g.addColorStop(1, '#a8743f'); c.fillStyle = g; c.fillRect(0, this.floor, W, H - this.floor);
+    c.strokeStyle = '#ffffff80'; c.lineWidth = 3; c.beginPath(); c.moveTo(0, this.floor + 4); c.lineTo(W, this.floor + 4); c.stroke();
+    // poste, tablero, aro y red
+    const bx = this.hx + rw + u * 0.18;
+    c.fillStyle = '#555'; c.fillRect(bx + u * 0.5, rimY - u * 1.2, u * 0.2, this.floor - rimY + u * 1.2); c.fillRect(bx, rimY - u * 0.7, u * 0.6, u * 0.12);
+    c.fillStyle = '#f5f5f5'; c.strokeStyle = '#333'; c.lineWidth = 2; c.fillRect(bx, rimY - u * 1.3, u * 0.12, u * 1.55); c.strokeRect(bx, rimY - u * 1.3, u * 0.12, u * 1.55);
+    c.strokeStyle = '#ffffffc0'; c.lineWidth = 1.5;
+    for (let i = 0; i <= 5; i++) { const t = i / 5; c.beginPath(); c.moveTo(this.hx - rw + t * rw * 2, rimY); c.lineTo(this.hx - rw * 0.55 + t * rw * 1.1, rimY + u * 0.7); c.stroke(); }
+    for (let j = 1; j <= 3; j++) { const t = j / 3, w2 = rw * (1 - 0.45 * t); c.beginPath(); c.moveTo(this.hx - w2, rimY + u * 0.7 * t); c.lineTo(this.hx + w2, rimY + u * 0.7 * t); c.stroke(); }
+    c.strokeStyle = '#ff6a00'; c.lineWidth = 4; c.beginPath(); c.ellipse(this.hx, rimY, rw, u * 0.08, 0, 0, 7); c.stroke();
+    // jugador
+    const px = this.sx - u * 0.35, fy = this.floor;
+    c.strokeStyle = '#1b1e2b'; c.lineWidth = u * 0.16; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(px, fy - u * 0.9); c.lineTo(px - u * 0.15, fy); c.moveTo(px, fy - u * 0.9); c.lineTo(px + u * 0.15, fy); c.stroke();
+    c.fillStyle = '#d52b1e'; c.beginPath(); c.roundRect(px - u * 0.25, fy - u * 1.75, u * 0.5, u * 0.9, u * 0.12); c.fill();
+    c.strokeStyle = '#e8b98e'; c.lineWidth = u * 0.12; c.beginPath(); c.moveTo(px + u * 0.15, fy - u * 1.6); c.lineTo(this.sx - u * 0.05, this.sy + u * 0.1); c.stroke();
+    c.fillStyle = '#e8b98e'; c.beginPath(); c.arc(px, fy - u * 2.0, u * 0.22, 0, 7); c.fill();
+    // trayectoria de ayuda (menos puntos a medida que avanzas)
+    if (!b.flying) {
+      let vx = 0, vy = 0;
+      if (this.drag && this.drag.cx != null) { vx = (this.drag.x - this.drag.cx) * 4.2; vy = (this.drag.y - this.drag.cy) * 4.2; }
+      else { const v = 450 + this.pow * 900; vx = Math.cos(this.ang) * v; vy = Math.sin(this.ang) * v; }
+      const dots = Math.max(3, 9 - this.made), gg = u * 9.8;
+      c.fillStyle = '#ffffffc0'; for (let i = 1; i <= dots; i++) { const t = i * 0.06; c.beginPath(); c.arc(b.x + vx * t, b.y + vy * t + 0.5 * gg * t * t, 3.5, 0, 7); c.fill(); }
+      if (this.drag && this.drag.cx != null) { c.strokeStyle = '#ffd23f'; c.lineWidth = 2; c.setLineDash([4, 5]); c.beginPath(); c.moveTo(this.drag.x, this.drag.y); c.lineTo(this.drag.cx, this.drag.cy); c.stroke(); c.setLineDash([]); }
+    }
+    // pelota
+    const bg = c.createRadialGradient(b.x - r * 0.3, b.y - r * 0.3, 1, b.x, b.y, r); bg.addColorStop(0, '#ffa552'); bg.addColorStop(1, '#d35400');
+    c.fillStyle = bg; c.beginPath(); c.arc(b.x, b.y, r, 0, 7); c.fill(); c.strokeStyle = '#3b1d06'; c.lineWidth = 1.6; c.stroke();
+    c.save(); c.translate(b.x, b.y); c.rotate(b.flying ? b.t * 8 : 0); c.beginPath(); c.moveTo(-r, 0); c.lineTo(r, 0); c.moveTo(0, -r); c.lineTo(0, r); c.stroke(); c.beginPath(); c.arc(-r * 1.3, 0, r * 0.9, -0.8, 0.8); c.stroke(); c.beginPath(); c.arc(r * 1.3, 0, r * 0.9, Math.PI - 0.8, Math.PI + 0.8); c.stroke(); c.restore();
+    if (this.swish > 0) { c.fillStyle = `rgba(255,210,63,${this.swish})`; c.font = 'bold 30px system-ui'; c.textAlign = 'center'; c.fillText('¡SWISH!', this.hx, rimY - u * 1.6); }
+    banner2(c, this.banner, 44);
+  }
+};
+
+/* ---- 4. Rugby: patear entre los palos (apuntar + potencia + viento) ---- */
+GAMES.rugby = class {
+  constructor() {
+    this.score = 0; this.lives = 3; this.ok = 0; this.bad = 0; this.time = 0; this.made = 0; this.pk = {};
+    $('#help').textContent = '1) Apunta con el mouse o ←/→ y fija con clic/ESPACIO · 2) Detén la potencia (más lejos = más fuerza). Ojo con el viento 💨. Si fallas, responde para no perder vida.';
+    this.setup();
+  }
+  setup() {
+    const lv = this.made;
+    this.D = 18 + lv * 4 + rand(0, 4); this.x0 = rand(-1, 1) * Math.min(20, 3 + lv * 3); this.wind = rand(-1, 1) * Math.min(4, lv * 0.7);
+    this.phase = 'aim'; this.theta = Math.atan2(-this.x0, this.D); this.power = 0; this.powerT = 0; this.kick = null;
+    this.banner = { text: `🏉 Patada ${lv + 1} · ${Math.round(this.D)} m · viento ${this.wind >= 0 ? '→' : '←'} ${Math.abs(this.wind).toFixed(1)}`, t: 2.5 };
+  }
+  hud() { return `<span>${hearts(this.lives)}</span><span>🏉 ${this.made} conversiones</span><span>⭐ ${this.score}</span><span>💨 ${this.wind >= 0 ? '→' : '←'} ${Math.abs(this.wind).toFixed(1)}</span>`; }
+  proj(X, Y, z) { const f = H * 0.95, zc = 5, s = f / (z + zc), hz = H * 0.42; return { x: W / 2 + (X - this.x0) * s, y: hz + (1.4 - Y) * s, s }; }
+  update(dt) {
+    this.time += dt;
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    const click = (() => { const sp = keys[' '] || keys.enter, was = this.pk.k; this.pk.k = sp; return (sp && !was) || mouse.tap || touch.tap; })();
+    mouse.tap = false; touch.tap = false;
+    if (this.phase === 'aim') {
+      const base = Math.atan2(-this.x0, this.D);
+      if (mouse.mt && mouse.mt !== this.lastMt) { this.lastMt = mouse.mt; this.theta = base + (mouse.x / W - 0.5) * 0.9; }
+      if (touch.active) this.theta = base + (touch.x / W - 0.5) * 0.9;
+      this.theta += ((keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0)) * dt * 0.5;
+      if (click && !(this.banner && this.banner.t > 2)) { this.phase = 'power'; this.powerT = 0; }
+    } else if (this.phase === 'power') {
+      this.powerT += dt; const sp = Math.min(3.5, 1.2 + this.made * 0.25), ph = (this.powerT * sp) % 2; this.power = ph < 1 ? ph : 2 - ph;
+      if (click) { this.phase = 'fly'; const v = 15 + this.power * 18, el = 0.6; this.kick = { t: 0, v, el, X: this.x0, Y: 0.2, z: 0 }; }
+    } else if (this.phase === 'fly') {
+      const k = this.kick; k.t += dt * 1.3;
+      const vh = k.v * Math.cos(k.el), t = k.t;
+      k.z = vh * Math.cos(this.theta) * t; k.X = this.x0 + vh * Math.sin(this.theta) * t + 0.5 * this.wind * t * t; k.Y = 0.2 + k.v * Math.sin(k.el) * t - 4.9 * t * t;
+      if (k.z >= this.D) { const good = Math.abs(k.X) < 2.8 && k.Y > 3; this.finish(good, good ? '' : (Math.abs(k.X) >= 2.8 ? 'Se fue por el lado' : 'Pasó por debajo del travesaño')); }
+      else if (k.Y < 0) this.finish(false, 'No alcanzó a llegar');
+    }
+  }
+  async finish(good, why) {
+    if (this.phase === 'result') return; this.phase = 'result';
+    if (good) { this.made++; this.score += 120 + this.made * 30; this.banner = { text: '🏉 ¡CONVERSIÓN! Entre los palos', t: 1.8 }; setTimeout(() => { if (game === this) this.setup(); }, 1300); return; }
+    this.banner = { text: `❌ ${why}`, t: 1.5, ok: false };
+    await new Promise(r => setTimeout(r, 900)); if (game !== this) return;
+    this.paused = true; clearInput();
+    const r = await askQuestion({ title: `🏉 ${why}`, sub: 'Responde bien para no perder una vida', time: 25 });
+    if (r === null || game !== this) return;
+    if (r) { this.ok++; this.score += 30; } else { this.bad++; this.lives--; }
+    this.paused = false; clearInput();
+    if (this.lives <= 0) return endGame(this, '🏉 Se acabó el partido de rugby');
+    const keep = this.made; this.setup(); this.made = keep;
+  }
+  draw() {
+    const c = ctx, hz = H * 0.42;
+    let g = c.createLinearGradient(0, 0, 0, hz); g.addColorStop(0, '#4a90d9'); g.addColorStop(1, '#bfe3ff'); c.fillStyle = g; c.fillRect(0, 0, W, hz);
+    c.fillStyle = '#3a4a6b'; c.fillRect(0, hz - H * 0.12, W, H * 0.12);
+    for (let i = 0; i < 220; i++) { c.fillStyle = ['#ffffff70', '#ff6b6b70', '#ffd23f70'][i % 3]; c.fillRect((i * 61) % W, hz - H * 0.11 + ((i * 37) % (H * 0.1)), 4, 5); }
+    c.fillStyle = '#46a846'; c.fillRect(0, hz, W, H - hz);
+    for (let i = -1; i < 12; i++) { // franjas del pasto en perspectiva
+      const z1 = i * 5, z2 = z1 + 5, a = this.proj(0, 0, z1), b = this.proj(0, 0, z2);
+      c.fillStyle = i % 2 ? '#3f9a3f' : '#46a846'; c.fillRect(0, b.y, W, a.y - b.y + 1);
+    }
+    c.fillStyle = '#46a846'; c.fillRect(0, hz, W, this.proj(0, 0, 60).y - hz + 1);
+    // palos (H)
+    const pL = [this.proj(-2.8, 0, this.D), this.proj(-2.8, 13, this.D)], pR = [this.proj(2.8, 0, this.D), this.proj(2.8, 13, this.D)], cb = [this.proj(-2.8, 3, this.D), this.proj(2.8, 3, this.D)];
+    c.strokeStyle = '#fff'; c.lineCap = 'butt'; c.lineWidth = Math.max(3, pL[0].s * 0.15);
+    c.beginPath(); c.moveTo(pL[0].x, pL[0].y); c.lineTo(pL[1].x, pL[1].y); c.moveTo(pR[0].x, pR[0].y); c.lineTo(pR[1].x, pR[1].y); c.moveTo(cb[0].x, cb[0].y); c.lineTo(cb[1].x, cb[1].y); c.stroke();
+    c.fillStyle = '#d52b1e'; for (const q of [pL[0], pR[0]]) c.fillRect(q.x - pL[0].s * 0.2, q.y - pL[0].s * 1.6, pL[0].s * 0.4, pL[0].s * 1.6);
+    // flecha de dirección
+    if (this.phase === 'aim' || this.phase === 'power') {
+      const a = this.proj(this.x0, 0, 1), b = this.proj(this.x0 + Math.sin(this.theta) * 10, 0, Math.cos(this.theta) * 10);
+      c.strokeStyle = this.phase === 'power' ? '#ff6b6b' : '#ffd23f'; c.lineWidth = 5; c.lineCap = 'round'; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke();
+      const an = Math.atan2(b.y - a.y, b.x - a.x); c.fillStyle = c.strokeStyle; c.beginPath(); c.moveTo(b.x + Math.cos(an) * 14, b.y + Math.sin(an) * 14); c.lineTo(b.x + Math.cos(an + 2.5) * 12, b.y + Math.sin(an + 2.5) * 12); c.lineTo(b.x + Math.cos(an - 2.5) * 12, b.y + Math.sin(an - 2.5) * 12); c.fill();
+    }
+    // pelota
+    const k = this.kick || { X: this.x0, Y: 0.25, z: 0, t: 0 }, bp = this.proj(k.X, k.Y, k.z), sh = this.proj(k.X, 0, k.z), rr = Math.max(4, bp.s * 0.18);
+    c.fillStyle = '#0004'; c.beginPath(); c.ellipse(sh.x, sh.y, rr * 1.2, rr * 0.35, 0, 0, 7); c.fill();
+    c.save(); c.translate(bp.x, bp.y); c.rotate(this.phase === 'fly' ? k.t * 9 : -0.4);
+    const bg = c.createLinearGradient(-rr, 0, rr, 0); bg.addColorStop(0, '#7a4a2b'); bg.addColorStop(0.5, '#b8783f'); bg.addColorStop(1, '#6b3f22');
+    c.fillStyle = bg; c.strokeStyle = '#2a1608'; c.lineWidth = 1.5; c.beginPath(); c.ellipse(0, 0, rr * 1.5, rr, 0, 0, 7); c.fill(); c.stroke();
+    c.strokeStyle = '#fff'; c.beginPath(); c.moveTo(-rr * 0.5, 0); c.lineTo(rr * 0.5, 0); c.stroke();
+    for (let i = -2; i <= 2; i++) { c.beginPath(); c.moveTo(i * rr * 0.2, -rr * 0.15); c.lineTo(i * rr * 0.2, rr * 0.15); c.stroke(); }
+    c.restore();
+    // viento
+    c.fillStyle = '#000a'; c.beginPath(); c.roundRect(12, 12, 120, 40, 10); c.fill();
+    c.fillStyle = '#fff'; c.font = 'bold 14px system-ui'; c.textAlign = 'left'; c.fillText(`💨 ${this.wind >= 0 ? '→' : '←'} ${Math.abs(this.wind).toFixed(1)}`, 22, 38);
+    if (this.phase === 'power') powerBar(c, W - 50, H * 0.45, Math.min(160, H * 0.3), this.power);
+    c.fillStyle = '#fff'; c.font = '600 15px system-ui'; c.textAlign = 'center';
+    if (this.phase === 'aim') c.fillText('Apunta y haz clic / ESPACIO para fijar', W / 2, H - 22);
+    if (this.phase === 'power') c.fillText('¡Detén la potencia! (más arriba = más lejos)', W / 2, H - 22);
+    banner2(c, this.banner, 80);
+  }
+};
+
+/* ---- 5. Túnel de trampas: plataformas con obstáculos ocultos y puertas ---- */
+GAMES.trap = class {
+  constructor() {
+    this.level = 1; this.score = 0; this.lives = 5; this.ok = 0; this.bad = 0; this.time = 0; this.deaths = 0; this.pk = {};
+    $('#help').textContent = 'Mover: ←/→ o A/D · Saltar: ↑, W o ESPACIO · En celular: botones abajo. Cuidado con las trampas ocultas. En la puerta respondes para pasar de nivel.';
+    this.build(true);
+  }
+  get T() { return Math.max(24, Math.min(44, Math.floor(H / 14))); }
+  build(newSeed) {
+    if (newSeed) this.seed = (Math.random() * 1e9) | 0;
+    const rnd = seeded(this.seed + this.level * 101), T = this.T, rows = Math.floor(H / T), gr = rows - 2, lv = this.level;
+    const solids = [], spikes = [], falls = [];
+    const ground = (x, w, kind = 'ground') => solids.push({ x: x * T, y: gr * T, w: w * T, h: 2 * T + 40, kind, t: 0, gone: false });
+    let x = 0; ground(0, 6); x = 6;
+    const len = 34 + lv * 7;
+    while (x < len) {
+      const r = rnd(), diff = Math.min(1, lv / 6);
+      if (r < 0.22) { const w = 2 + (rnd() < diff * 0.7 ? 1 : 0); x += w; } // pozo (máx. 3 casillas: siempre se puede saltar)
+      else if (r < 0.4) { const w = 3 + Math.floor(rnd() * 3); ground(x, w); const sx = x + 1 + Math.floor(rnd() * (w - 2)); spikes.push({ x: sx * T, y: gr * T, w: T, hidden: false, up: 1 }); x += w; } // pinchos visibles
+      else if (r < 0.55 && lv >= 1) { const w = 4 + Math.floor(rnd() * 3); ground(x, w); spikes.push({ x: (x + 1 + Math.floor(rnd() * (w - 2))) * T, y: gr * T, w: T, hidden: true, up: 0 }); x += w; } // pinchos ocultos
+      else if (r < 0.68) { const w = 2; ground(x, w); solids.push({ x: (x + 0.5) * T, y: (gr - 1 - Math.floor(rnd() * 2)) * T, w: T * 1.5, h: T, kind: 'plat' }); x += w; } // escalón
+      else if (r < 0.8 && lv >= 2) { const w = 4; ground(x, 1); for (let i = 1; i < w - 1; i++) solids.push({ x: (x + i) * T, y: gr * T, w: T, h: T, kind: 'crumble', t: 0, gone: false }); ground(x + w - 1, 1); x += w; } // piso que se cae
+      else if (r < 0.92 && lv >= 2) { const w = 3; ground(x, w); falls.push({ x: (x + 1) * T, y: (gr - 5) * T, w: T, h: T, vy: 0, on: false, y0: (gr - 5) * T }); x += w; } // bloque que cae
+      else { const w = 3; x += 1; solids.push({ x: x * T, y: (gr - 2) * T, w: T * 2, h: T * 0.5, kind: 'plat' }); x += w - 1; } // plataforma sobre pozo
+    }
+    ground(x, 6); this.door = { x: (x + 3) * T, y: gr * T - T * 1.6, w: T, h: T * 1.6 };
+    Object.assign(this, { solids, spikes, falls, levelW: (x + 6) * T, gr });
+    this.p = { x: T * 1.5, y: gr * T - T, vx: 0, vy: 0, w: T * 0.6, h: T * 0.9, on: false, coyote: 0, face: 1, dead: 0 };
+    this.camX = 0; this.parts = [];
+    this.banner = { text: `🚧 Nivel ${this.level}: llega a la puerta`, t: 2 };
+  }
+  onResize() { this.build(false); }
+  hud() { return `<span>❤️ x${this.lives}</span><span>Nivel ${this.level}</span><span>⭐ ${this.score}</span><span>💀 ${this.deaths}</span>`; }
+  btns() { const s = Math.min(78, W * 0.18), y = H - s - 14; return { L: { x: 14, y, s }, R: { x: 24 + s, y, s }, J: { x: W - s - 14, y, s } }; }
+  input() {
+    let l = keys.arrowleft || keys.a, r = keys.arrowright || keys.d, j = keys.arrowup || keys.w || keys[' '];
+    if (isTouchDevice && touch.pts && touch.pts.length) {
+      const B = this.btns(), inB = (q, b) => q.x > b.x - 10 && q.x < b.x + b.s + 10 && q.y > b.y - 30;
+      for (const q of touch.pts) { if (inB(q, B.L)) l = true; else if (inB(q, B.R)) r = true; else if (q.x > W * 0.5) j = true; }
+    }
+    return { l, r, j };
+  }
+  die(why) {
+    if (this.p.dead) return; this.p.dead = 1; this.deaths++; this.lives--;
+    for (let i = 0; i < 20; i++) { const a = rand(0, 6.3), s = rand(60, 260); this.parts.push({ x: this.p.x, y: this.p.y - this.p.h / 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 120, t: rand(0.4, 0.8) }); }
+    this.banner = { text: `💀 ${why}`, t: 1.3, ok: false };
+    setTimeout(() => { if (game !== this) return; if (this.lives <= 0) return endGame(this, '🚧 Las trampas te ganaron'); this.build(false); this.banner = { text: `Intenta de nuevo · vidas: ${this.lives}`, t: 1.5 }; }, 900);
+  }
+  async atDoor() {
+    this.paused = true; clearInput();
+    while (true) {
+      const r = await askQuestion({ title: '🚪 Puerta del nivel', sub: 'Responde bien para pasar al siguiente nivel', time: 30 });
+      if (r === null || game !== this) return;
+      if (r) { this.ok++; break; }
+      this.bad++; this.lives--;
+      if (this.lives <= 0) return endGame(this, '🚧 Te quedaste atrapado en el túnel');
+    }
+    this.score += 150 * this.level; this.level++; this.build(true); clearInput(); this.paused = false;
+    this.banner = { text: `✅ ¡Pasaste! Nivel ${this.level}: más trampas`, t: 2 };
+  }
+  update(dt) {
+    this.time += dt; dt = Math.min(dt, 1 / 30);
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    for (const q of this.parts) { q.x += q.vx * dt; q.y += q.vy * dt; q.vy += 900 * dt; q.t -= dt; } this.parts = this.parts.filter(q => q.t > 0);
+    const p = this.p, T = this.T; if (p.dead) return;
+    const inp = this.input(), sp = T * 6.2;
+    p.vx = ((inp.r ? 1 : 0) - (inp.l ? 1 : 0)) * sp; if (p.vx) p.face = Math.sign(p.vx);
+    const jumpPressed = inp.j && !this.pk.j; this.pk.j = inp.j;
+    p.coyote = p.on ? 0.1 : p.coyote - dt;
+    if (jumpPressed && p.coyote > 0) { p.vy = -T * 14.2; p.coyote = 0; p.on = false; }
+    if (!inp.j && p.vy < -T * 5) p.vy = -T * 5; // salto más corto si sueltas
+    p.vy = Math.min(T * 22, p.vy + T * 40 * dt);
+    const live = this.solids.filter(s => !s.gone).concat(this.falls);
+    const hit = (ax, ay) => live.find(s => ax + p.w / 2 > s.x && ax - p.w / 2 < s.x + s.w && ay > s.y && ay - p.h < s.y + s.h);
+    p.x += p.vx * dt; let h = hit(p.x, p.y); if (h) p.x = p.vx > 0 ? h.x - p.w / 2 - 0.01 : h.x + h.w + p.w / 2 + 0.01;
+    p.x = Math.max(p.w / 2, p.x);
+    p.y += p.vy * dt; p.on = false; h = hit(p.x, p.y);
+    if (h) { if (p.vy > 0) { p.y = h.y; p.on = true; if (h.kind === 'crumble' && !h.t) h.t = 0.35; } else { p.y = h.y + h.h + p.h; } p.vy = 0; }
+    for (const s of this.solids) if (s.t > 0) { s.t -= dt; if (s.t <= 0) { s.gone = true; s.t = -1; } }
+    // trampas ocultas
+    for (const k of this.spikes) {
+      if (k.hidden && k.up === 0 && Math.abs(p.x - (k.x + T / 2)) < T * 1.7 && p.y <= k.y + 2) k.up = 0.001;
+      if (k.up > 0 && k.up < 1) k.up = Math.min(1, k.up + dt / 0.13);
+      if (k.up > 0.6 && p.x + p.w / 2 > k.x + 4 && p.x - p.w / 2 < k.x + T - 4 && p.y > k.y - T * 0.6 * k.up) return this.die(k.hidden ? '¡Pinchos ocultos!' : '¡Pinchos!');
+    }
+    for (const f of this.falls) {
+      if (!f.on && Math.abs(p.x - (f.x + T / 2)) < T * 0.9 && p.y > f.y) f.on = true;
+      if (f.on) { f.vy += T * 50 * dt; f.y += f.vy * dt; const floor = this.gr * T - f.h; if (f.y > floor) { f.y = floor; f.vy = 0; } }
+      if (f.on && f.vy > 0 && p.x + p.w / 2 > f.x && p.x - p.w / 2 < f.x + f.w && p.y - p.h < f.y + f.h && p.y > f.y + f.h * 0.5) return this.die('¡Te cayó un bloque!');
+    }
+    if (p.y > H + 60) return this.die('Te caíste al vacío');
+    const d = this.door; if (p.x > d.x && p.x < d.x + d.w && p.y > d.y) return this.atDoor();
+    this.camX += (Math.max(0, Math.min(this.levelW - W, p.x - W * 0.38)) - this.camX) * Math.min(1, dt * 8);
+  }
+  draw() {
+    const c = ctx, T = this.T, p = this.p;
+    let g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1c1a2e'); g.addColorStop(1, '#3a2f4a'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#ffffff10'; for (let i = 0; i < 18; i++) { const x = ((i * 173 - this.camX * 0.3) % (W + 200) + W + 200) % (W + 200) - 100; c.fillRect(x, H * 0.15 + (i % 5) * H * 0.1, 60, 8); }
+    c.save(); c.translate(-Math.round(this.camX), 0);
+    for (const s of this.solids) {
+      if (s.gone) continue; if (s.x + s.w < this.camX - 10 || s.x > this.camX + W + 10) continue;
+      const shake = s.t > 0 ? rand(-2, 2) : 0;
+      if (s.kind === 'plat') { c.fillStyle = '#7b6aa8'; c.fillRect(s.x, s.y, s.w, s.h); c.fillStyle = '#a99bd6'; c.fillRect(s.x, s.y, s.w, 4); }
+      else {
+        const crumble = s.kind === 'crumble';
+        for (let tx = s.x; tx < s.x + s.w - 1; tx += T) {
+          c.fillStyle = crumble ? '#8a6f52' : '#6b4f3a'; c.fillRect(tx + shake, s.y, T - 1, s.h);
+          c.fillStyle = crumble ? '#a8875f' : '#58a65a'; c.fillRect(tx + shake, s.y, T - 1, T * 0.22);
+          c.fillStyle = '#00000025'; c.fillRect(tx + shake + T * 0.2, s.y + T * 0.45, T * 0.2, T * 0.15); c.fillRect(tx + shake + T * 0.6, s.y + T * 0.75, T * 0.15, T * 0.12);
+        }
+      }
+    }
+    for (const k of this.spikes) if (k.up > 0) {
+      const h = T * 0.6 * k.up; c.fillStyle = k.hidden ? '#e5e7eb' : '#cfd5dd'; c.strokeStyle = '#333'; c.lineWidth = 1;
+      for (let i = 0; i < 3; i++) { c.beginPath(); c.moveTo(k.x + i * T / 3, k.y); c.lineTo(k.x + i * T / 3 + T / 6, k.y - h); c.lineTo(k.x + (i + 1) * T / 3, k.y); c.fill(); c.stroke(); }
+    }
+    for (const f of this.falls) { c.fillStyle = '#5c5f6b'; c.fillRect(f.x, f.y, f.w, f.h); c.fillStyle = '#ff5d73'; c.fillRect(f.x + f.w * 0.2, f.y + f.h * 0.35, f.w * 0.2, f.h * 0.12); c.fillRect(f.x + f.w * 0.6, f.y + f.h * 0.35, f.w * 0.2, f.h * 0.12); c.fillStyle = '#2b2d36'; c.fillRect(f.x + f.w * 0.25, f.y + f.h * 0.65, f.w * 0.5, f.h * 0.1); }
+    // puerta
+    const d = this.door; c.fillStyle = '#7a4a2b'; c.beginPath(); c.roundRect(d.x - 4, d.y - 4, d.w + 8, d.h + 4, [d.w / 2, d.w / 2, 0, 0]); c.fill();
+    c.fillStyle = '#b5703c'; c.beginPath(); c.roundRect(d.x, d.y, d.w, d.h, [d.w / 2, d.w / 2, 0, 0]); c.fill();
+    c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(d.x + d.w * 0.75, d.y + d.h * 0.55, 3, 0, 7); c.fill();
+    c.font = `bold ${Math.round(T * 0.4)}px system-ui`; c.textAlign = 'center'; c.fillText('SALIDA', d.x + d.w / 2, d.y - 10);
+    // jugador
+    if (!p.dead) {
+      const run = p.on && p.vx ? Math.sin(this.time * 18) : 0, x = p.x, y = p.y, w = p.w, hh = p.h;
+      c.save(); c.translate(x, y); c.scale(p.face, 1);
+      c.strokeStyle = '#2d3a5c'; c.lineWidth = w * 0.22; c.lineCap = 'round';
+      c.beginPath(); c.moveTo(-w * 0.15, -hh * 0.35); c.lineTo(-w * 0.15 + run * w * 0.25, 0); c.moveTo(w * 0.15, -hh * 0.35); c.lineTo(w * 0.15 - run * w * 0.25, 0); c.stroke();
+      c.fillStyle = '#ff5a5f'; c.beginPath(); c.roundRect(-w / 2, -hh * 0.8, w, hh * 0.5, w * 0.2); c.fill();
+      c.fillStyle = '#e8b98e'; c.beginPath(); c.arc(0, -hh * 0.92, w * 0.38, 0, 7); c.fill();
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.ellipse(0, -hh * 1.08, w * 0.4, w * 0.16, 0, Math.PI, 0); c.fill(); c.fillRect(0, -hh * 1.1, w * 0.5, w * 0.08);
+      c.fillStyle = '#111'; c.beginPath(); c.arc(w * 0.16, -hh * 0.94, 2, 0, 7); c.fill();
+      c.restore();
+    }
+    c.fillStyle = '#ff5a5f'; for (const q of this.parts) { c.globalAlpha = q.t * 1.5; c.fillRect(q.x, q.y, 4, 4); } c.globalAlpha = 1;
+    c.restore();
+    if (isTouchDevice) { const B = this.btns(); c.globalAlpha = 0.55; for (const [k, lab] of [['L', '◀'], ['R', '▶'], ['J', '⤒']]) { const b = B[k]; c.fillStyle = '#000'; c.beginPath(); c.roundRect(b.x, b.y, b.s, b.s, 16); c.fill(); c.fillStyle = '#fff'; c.font = `bold ${b.s * 0.45}px system-ui`; c.textAlign = 'center'; c.fillText(lab, b.x + b.s / 2, b.y + b.s * 0.65); } c.globalAlpha = 1; }
+    banner2(c, this.banner, 44);
+  }
+};
+
 /* ============ MODO HISTORIA: mapa, fichas y tu casa ============ */
 let STORY = Object.assign({ house: null, coins: 0, owned: [], zones: {} }, store.get('ej_story', {}));
 const saveStory = () => { store.set('ej_story', STORY); cloudSave(); };
@@ -2468,11 +3055,11 @@ function drawDecor(c, cx, gy, s, info, back, t = 0) {
 // lugares del mapa: cada uno es un minijuego con la materia que elijas
 const PLACES = [
   { id: 'casa', name: 'Tu casa', icon: '🏠', x: 0.5, y: 0.5, house: true },
-  { id: 'bosque', name: 'Bosque', icon: '🌲', x: 0.15, y: 0.24, game: 'zombie', theme: 'forest', desc: 'Te persiguen lobos' },
-  { id: 'estadio', name: 'Estadio', icon: '🏟️', x: 0.85, y: 0.24, game: 'penal', desc: 'Tanda de penales' },
-  { id: 'huerto', name: 'Huerto', icon: '🍎', x: 0.5, y: 0.13, game: 'catch', desc: 'Atrapa la respuesta' },
-  { id: 'cueva', name: 'Cueva', icon: '🕳️', x: 0.15, y: 0.78, game: 'maze', desc: 'Laberinto con bichos' },
-  { id: 'estacion', name: 'Estación', icon: '🚉', x: 0.85, y: 0.78, game: 'runner', desc: 'Escapa del profe' },
+  { id: 'bosque', name: 'Bosque', icon: '🌲', x: 0.15, y: 0.24, game: 'forest', desc: 'Escapa con solo 5 balas' },
+  { id: 'estadio', name: 'Estadio', icon: '🏀', x: 0.85, y: 0.24, game: 'basket', desc: 'Encesta la pelota' },
+  { id: 'huerto', name: 'Huerto', icon: '🍎', x: 0.5, y: 0.13, game: 'garden', desc: 'Dispárale a los conejos' },
+  { id: 'rugby', name: 'Cancha de rugby', icon: '🏉', x: 0.15, y: 0.78, game: 'rugby', desc: 'Patea entre los palos' },
+  { id: 'tunel', name: 'Túnel de trampas', icon: '🚧', x: 0.85, y: 0.78, game: 'trap', desc: 'Saltos y trampas ocultas' },
   { id: 'biblioteca', name: 'Biblioteca', icon: '📚', x: 0.5, y: 0.9, game: 'review', desc: 'Repaso tranquilo' }
 ];
 const placeSubject = pl => SUBJECTS.find(s => s.id === STORY.zones[pl.id]) || CUR;
