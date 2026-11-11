@@ -1422,7 +1422,7 @@ GAMES.runner = class {
     this.clouds = [...Array(6)].map(() => ({ x: Math.random(), y: rand(0.12, 0.6), w: rand(40, 95), sp: rand(0.2, 0.6) }));
     this.skyline = [...Array(30)].map((_, i) => ({ x: i / 30 + rand(-0.01, 0.01), w: rand(0.03, 0.05), h: rand(0.25, 1), col: ['#9aa9cc', '#a9b6d6', '#8c9bc0'][i % 3] }));
     this.banner = { text: '👨‍🏫 ¡Corre! El profe te persigue', t: 2.5 };
-    $('#help').textContent = 'Carril: ←/→ o A/D · Saltar: ↑, W o espacio · En celular: desliza. Si chocas, el profe se acerca. Los portones 🔒 se abren respondiendo.';
+    $('#help').textContent = 'Carril: ←/→ o A/D · Saltar: ↑, W o espacio · En celular: desliza. Si chocas, responde: si fallas, el profe se acerca. Los portones 🔒 se abren respondiendo.';
   }
   stop() { $('#catchQ').style.display = 'none'; }
   hud() {
@@ -1458,6 +1458,15 @@ GAMES.runner = class {
     this.gap -= 3.5; this.slow = 1.2; this.boost = 0; this.shake = 0.35; this.inv = 0.9;
     this.dust(18, '#e9c46a'); this.banner = { text: o.type === 'block' ? '💥 ¡Chocaste! El profe se acerca' : '💥 ¡Tropezaste!', t: 1.3 };
     this.say(['¡Te tengo!', '¡No corras en el pasillo!', '¡Vuelve a clases!', '¡Ya casi!'][Math.random() * 4 | 0]);
+  }
+  // al chocar: pregunta. Si aciertas te recuperas sin castigo; si fallas, tropiezas y el profe se acerca
+  async crash(o) {
+    o.hit = true; this.paused = true; this.shake = 0.3; clearInput();
+    const r = await askQuestion({ title: o.type === 'block' ? '💥 ¡Chocaste con un tren!' : '💥 ¡Tropezaste con la valla!', sub: 'Responde bien y el profe no te alcanza', time: 25 });
+    if (r === null || game !== this) return;
+    this.paused = false; clearInput(); this.pk = {};
+    if (r) { this.ok++; this.score += 30; this.obs = this.obs.filter(x => x !== o); this.inv = 1.2; this.banner = { text: '✅ ¡Te recuperaste!', t: 1.3, ok: true }; }
+    else { this.bad++; this.stumble(o); }
   }
   async openLock() {
     const lk = this.lock; lk.asked = true; this.paused = true; clearInput();
@@ -1513,7 +1522,7 @@ GAMES.runner = class {
       if (this.lock.z < -6) this.lock = null;
     }
     this.nextRow -= dz; this.nextLock -= dz;
-    if (this.nextLock <= 0 && !this.lock) { this.lock = { z: 120, asked: false, open: false, openT: 0 }; this.nextLock = rand(170, 230); }
+    if (this.nextLock <= 0 && !this.lock) { this.lock = { z: 120, asked: false, open: false, openT: 0 }; this.nextLock = rand(380, 500) + this.speed * 4; }
     if (this.nextRow <= 0) {
       if (!this.lock || Math.abs(this.lock.z - 95) > 25) this.spawnRow(95);
       this.nextRow = Math.max(this.speed * 0.6, rand(14, 22) + this.speed * 0.3 - Math.min(8, this.level * 1.2));
@@ -1523,8 +1532,8 @@ GAMES.runner = class {
       if (o.lane !== lane || o.hit) continue;
       if (o.type === 'coin') { if (o.z < 0.8 && o.z > -0.6 && this.h < 1.6) { o.hit = true; this.coins++; this.score += 5; this.gap = Math.min(15, this.gap + 0.15); } continue; }
       if (this.inv > 0) continue;
-      if (o.type === 'barrier' && o.z < 0.5 && o.z > -0.4 && this.h < 0.8) { this.stumble(o); break; }
-      if (o.type === 'block' && o.z < 0.5 && o.z + o.len > -0.2) { this.stumble(o); break; }
+      if (o.type === 'barrier' && o.z < 0.5 && o.z > -0.4 && this.h < 0.8) return this.crash(o);
+      if (o.type === 'block' && o.z < 0.5 && o.z + o.len > -0.2) return this.crash(o);
     }
     this.obs = this.obs.filter(o => o.z + o.len > -6 && !(o.type === 'coin' && o.hit));
     if (this.gap <= 0 && this.inv <= 0) { this.gap = 0; return this.caught(); }
