@@ -76,6 +76,18 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #catchQ .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px;font-weight:500;font-size:14px}
 #catchQ .lanes div{background:#2b3a55;border:1px solid #58a6ff;border-radius:8px;padding:6px 8px}
 #catchQ .lanes div.empty{opacity:.3;background:none}
+#storyPanel{display:none;position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:min(760px,calc(100% - 20px));max-height:45%;overflow:auto;background:#10151fee;border:1px solid var(--line);border-radius:14px;padding:12px 14px;z-index:2;font-size:14px}
+#storyPanel select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;margin-top:4px;max-width:100%}
+.sp-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.sp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px;margin-top:8px}
+.sp-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 6px;font-size:13px;text-align:center}
+.sp-item .sp-ico{font-size:26px;line-height:1.2}
+.sp-item small{color:var(--warn);font-weight:700}
+.sp-item.have{border-color:var(--accent)}
+.sp-item.have small{color:var(--accent)}
+.storycard{background:linear-gradient(135deg,#1f4d3a,#2b3a6b);border-color:#6ee7a088!important}
+.storycard b{font-size:20px!important}
+.minis{margin:16px 0 4px;color:var(--muted);font-size:14px;font-weight:600}
 .help{transition:opacity 1s;background:#000a;padding:6px 10px;border-radius:8px;}
 .help.hide{opacity:0}
 .help{position:absolute;bottom:10px;left:12px;right:12px;color:#fff9;font-size:13px;pointer-events:none}
@@ -175,6 +187,11 @@ Reglas:
   <section class="card">
     <h2>2 · Elige un juego</h2>
     <p class="status" id="playingWith" style="margin:-4px 0 12px"></p>
+    <button class="game storycard" id="storyBtn">
+      <span class="ico">🗺️</span>
+      <span><b>Modo Historia</b><small>Recorre el mapa: el bosque, el estadio, la cueva… cada lugar con la materia que elijas. Gana fichas y arregla tu propia casa, castillo o pirámide.</small><span class="best" id="storyInfo"></span></span>
+    </button>
+    <div class="minis">🎮 Minijuegos</div>
     <div class="games">
       <button class="game" data-game="zombie">
         <span class="ico">🧟</span>
@@ -215,6 +232,7 @@ Reglas:
   <div id="stage">
     <canvas id="cv"></canvas>
     <div id="catchQ"></div>
+    <div id="storyPanel"></div>
     <div class="help" id="help"></div>
   </div>
 </div>
@@ -231,6 +249,19 @@ Reglas:
       <div class="exp" id="qExp"></div>
       <button class="primary" id="qNext">Continuar (Enter)</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="welcomeModal">
+  <div class="qcard" style="text-align:center;max-width:440px">
+    <div style="font-size:46px">🎓🎮</div>
+    <div class="qtitle" style="color:var(--text);font-size:26px">Bienvenido a <span style="color:var(--accent)">Estudia Jugando</span></div>
+    <p class="qsub" style="margin:8px 0 18px">Inicia sesión para guardar tu progreso, tus materias, tu casa y aparecer en el ranking.</p>
+    <div style="display:grid;gap:10px">
+      <button class="primary" id="welcomeLogin" style="padding:14px">🔐 Iniciar sesión con Google</button>
+      <button id="welcomeGuest" style="padding:14px">👤 Jugar como invitado</button>
+    </div>
+    <p class="qsub" style="margin-top:12px;font-size:12px">Como invitado tu progreso queda solo en este navegador.</p>
   </div>
 </div>
 
@@ -254,6 +285,7 @@ Reglas:
       <div><b id="endBad">0</b><small>Incorrectas</small></div>
     </div>
     <div class="qsub" id="endBest"></div>
+    <div id="endCoins" style="font-weight:700;color:var(--warn);margin-top:8px"></div>
     <div class="row" style="justify-content:center">
       <button class="primary" id="againBtn">Jugar otra vez</button>
       <button id="menuBtn">Volver al menú</button>
@@ -553,8 +585,14 @@ function initFirebase() {
     fdb = firebase.firestore(); fdb.settings({ ignoreUndefinedProperties: true, merge: true });
     const isLocal = !location.hostname || ['localhost', '127.0.0.1'].includes(location.hostname); // las pruebas locales no cuentan como visitas
     if (firebase.analytics && !isLocal) firebase.analytics.isSupported().then(ok => { if (ok) fa = firebase.analytics(); }).catch(() => {});
+    let firstAuth = true;
     firebase.auth().onAuthStateChanged(async u => {
       fbUser = u; cloudReady = false; renderAccount();
+      // al entrar: si no hay sesión, preguntar al tiro si quiere iniciar sesión o jugar como invitado
+      let welcomed = false; try { welcomed = sessionStorage.getItem('ej_welcomed') === '1'; } catch (e) {}
+      if (firstAuth && !u && !welcomed) $('#welcomeModal').classList.add('on');
+      if (u) $('#welcomeModal').classList.remove('on');
+      firstAuth = false;
       if (u) await cloudLoad();
     });
   } catch (e) { console.warn(e); $('#account').style.display = 'none'; }
@@ -574,6 +612,14 @@ async function cloudLoad() {
     const best = store.get('ej_best', {});
     for (const k in (ud.best || {})) best[k] = Math.max(best[k] || 0, ud.best[k]);
     store.set('ej_best', best);
+    if (ud.story) { // modo historia: se junta lo de la nube con lo de este dispositivo
+      const cs = ud.story;
+      STORY.coins = Math.max(STORY.coins || 0, cs.coins || 0);
+      STORY.owned = [...new Set([...(cs.owned || []), ...STORY.owned])];
+      STORY.house = cs.house || STORY.house;
+      STORY.zones = Object.assign({}, STORY.zones, cs.zones || {});
+      store.set('ej_story', STORY);
+    }
     SUBJECTS = merged;
     CUR = SUBJECTS.find(s => s.id === ud.current) || SUBJECTS.find(s => s.id === CUR.id) || SUBJECTS[0];
     QUESTIONS = CUR.questions; deck = []; notesEl.value = CUR.notes || '';
@@ -593,7 +639,7 @@ async function cloudSaveNow() {
   setSync('⏳ Guardando…');
   try {
     const uref = fdb.collection('users').doc(fbUser.uid), batch = fdb.batch(), now = Date.now();
-    batch.set(uref, { name: fbUser.displayName || '', current: CUR.id, best: store.get('ej_best', {}), updated: now }, { merge: true });
+    batch.set(uref, { name: fbUser.displayName || '', current: CUR.id, best: store.get('ej_best', {}), story: STORY, updated: now }, { merge: true });
     SUBJECTS.forEach((s, i) => batch.set(uref.collection('subjects').doc(s.id),
       { id: s.id, name: s.name, notes: (s.notes || '').slice(0, 300000), questions: s.questions, order: i, updated: now }));
     deletedIds.forEach(id => batch.delete(uref.collection('subjects').doc(id)));
@@ -659,6 +705,9 @@ function cloudSave() {
   cloudTimer = setTimeout(cloudSaveNow, 1500);
 }
 window.addEventListener('load', initFirebase);
+const closeWelcome = () => { $('#welcomeModal').classList.remove('on'); try { sessionStorage.setItem('ej_welcomed', '1'); } catch (e) {} };
+$('#welcomeGuest').onclick = closeWelcome;
+$('#welcomeLogin').onclick = async () => { closeWelcome(); await login(); };
 saveSubjects();
 const notesEl = $('#notes'), statusEl = $('#status');
 notesEl.value = CUR.notes || '';
@@ -706,6 +755,7 @@ function renderQuestions() {
   $('#qdetails').style.display = n ? '' : 'none';
   $('#qlist').innerHTML = QUESTIONS.map((q, i) =>
     `<div class="qitem"><span>${esc(q.q).replace(/\n/g, '<br>')}<br><em>✔ ${esc(q.options[q.answer])}</em></span><button data-del="${i}" title="Eliminar">✕</button></div>`).join('');
+  try { $('#storyInfo').textContent = `🪙 ${STORY.coins} fichas · 🏠 ${housePct()}% de tu casa`; } catch (e) {}
   const best = store.get('ej_best', {});
   document.querySelectorAll('[data-best]').forEach(el => { const b = best[el.dataset.best]; el.textContent = b ? `🏆 Récord: ${b}` : ''; });
 }
@@ -844,30 +894,53 @@ cv.addEventListener('touchend', e => {
 const clearInput = () => { for (const k in keys) keys[k] = false; mouse.down = false; mouse.tap = false; touch.active = false; touch.tap = false; };
 
 /* ============ motor ============ */
-let game = null, gameKind = null, lastT = 0, lastHud = '';
+let game = null, gameKind = null, gameOpts = {}, lastT = 0, lastHud = '';
 const GAMES = {};
-function startGame(kind) {
-  if (!QUESTIONS.length) return;
-  gameKind = kind;
+let STORY_RUN = null; // mientras juegas un lugar del modo historia: { zone, subject }
+function startGame(kind, opts = {}) {
+  const meta = kind === 'world' || kind === 'house'; // mapa y casa no usan preguntas
+  if (!meta) {
+    const subj = opts.subject && SUBJECTS.find(s => s.id === opts.subject);
+    QUESTIONS = subj ? subj.questions : CUR.questions; deck = [];
+    if (!QUESTIONS.length) { QUESTIONS = CUR.questions; return; }
+  }
+  if (game && game.stop) game.stop();
+  closeQuestion(true);
+  gameKind = kind; gameOpts = opts; STORY_RUN = opts.story ? opts : null;
   $('#gameScreen').classList.add('on'); $('#endModal').classList.remove('on');
-  resize(); clearInput(); $('#optBtn').hidden = true;
-  game = new GAMES[kind]();
-  track('juego_iniciado', { juego: kind, preguntas: QUESTIONS.length });
+  $('#storyPanel').style.display = 'none'; $('#storyPanel').innerHTML = ''; $('#catchQ').style.display = 'none';
+  resize(); clearInput(); $('#optBtn').hidden = true; $('#gameScreen').classList.remove('manualAim');
+  $('#backBtn').textContent = (STORY_RUN || kind === 'house') ? '← Mapa' : '← Menú';
+  game = new GAMES[kind](opts);
+  if (!meta) track('juego_iniciado', { juego: kind, preguntas: QUESTIONS.length, historia: STORY_RUN ? 1 : 0 });
   const help = $('#help'); help.classList.remove('hide'); clearTimeout(startGame.ht);
   startGame.ht = setTimeout(() => help.classList.add('hide'), 8000);
 }
+// fichas por partida del modo historia: según puntaje y respuestas correctas
+function awardCoins(g) {
+  if (!STORY_RUN || !g || g.meta || g.awarded) return 0;
+  g.awarded = true;
+  const n = Math.floor(Math.floor(g.score) / 40) + (g.ok || 0) * 2;
+  if (n > 0) { STORY.coins += n; saveStory(); }
+  return n;
+}
 function stopGame() {
-  if (game && game.stop) game.stop();
-  // salir con "← Menú" a mitad de partida igual guarda los puntos ganados
-  if (game && !game.over && Math.floor(game.score) > 0) {
-    const sc = Math.floor(game.score), best = store.get('ej_best', {});
+  const g = game, wasStory = !!STORY_RUN;
+  // salir a mitad de partida igual guarda los puntos ganados
+  if (g && !g.meta && !g.over && Math.floor(g.score) > 0) {
+    const sc = Math.floor(g.score), best = store.get('ej_best', {});
     if (sc > (best[gameKind] || 0)) { best[gameKind] = sc; store.set('ej_best', best); cloudSave(); }
     rankingUpdate(gameKind, sc);
-    track('juego_terminado', { juego: gameKind, puntaje: sc, correctas: game.ok, incorrectas: game.bad, abandonado: 1 });
-    game.over = true;
+    track('juego_terminado', { juego: gameKind, puntaje: sc, correctas: g.ok, incorrectas: g.bad, abandonado: 1 });
+    g.over = true;
   }
+  const coins = awardCoins(g);
+  if (g && g.stop) g.stop();
   game = null; closeQuestion(true); $('#optBtn').hidden = true; $('#gameScreen').classList.remove('manualAim');
+  QUESTIONS = CUR.questions; deck = [];
+  if (wasStory || (g && g.backTo)) { STORY_RUN = null; startGame('world', { coinsMsg: coins }); return; }
   $('#gameScreen').classList.remove('on'); $('#endModal').classList.remove('on'); $('#catchQ').style.display = 'none';
+  $('#storyPanel').style.display = 'none';
   renderQuestions();
 }
 function endGame(g, title) {
@@ -877,16 +950,20 @@ function endGame(g, title) {
   const best = store.get('ej_best', {}); const prev = best[gameKind] || 0;
   if (g.score > prev) { best[gameKind] = g.score; store.set('ej_best', best); cloudSave(); }
   rankingUpdate(gameKind, g.score);
+  const coins = awardCoins(g);
   $('#endTitle').textContent = title;
   $('#endScore').textContent = g.score; $('#endOk').textContent = g.ok; $('#endBad').textContent = g.bad;
   $('#endBest').textContent = g.score > prev ? '🏆 ¡Nuevo récord!' : `Récord: ${prev}`;
+  $('#endCoins').textContent = STORY_RUN ? `🪙 +${coins} fichas para tu casa (tienes ${STORY.coins})` : '';
+  $('#menuBtn').textContent = STORY_RUN ? '🗺️ Volver al mapa' : 'Volver al menú';
   $('#endModal').classList.add('on');
 }
 $('#backBtn').onclick = stopGame;
 $('#menuBtn').onclick = stopGame;
-$('#againBtn').onclick = () => startGame(gameKind);
+$('#againBtn').onclick = () => startGame(gameKind, gameOpts);
 document.querySelectorAll('.game[data-game]').forEach(b => b.onclick = () => startGame(b.dataset.game));
 $('#rankBtn').onclick = showRanking;
+$('#storyBtn').onclick = () => startGame('world');
 $('#rankClose').onclick = () => $('#rankModal').classList.remove('on');
 $('#rankModal').addEventListener('click', e => { if (e.target.id === 'rankModal') $('#rankModal').classList.remove('on'); });
 $('#rankTabs').addEventListener('click', e => { const b = e.target.closest('[data-rt]'); if (b) { rankTab = b.dataset.rt; showRanking(); } });
@@ -905,11 +982,14 @@ const hearts = n => '❤️'.repeat(Math.max(0, n)) + '🖤'.repeat(Math.max(0, 
 
 /* ============ JUEGO 1: Escape Zombie ============ */
 GAMES.zombie = class {
-  constructor() {
+  constructor(opts = {}) {
+    this.forest = opts.theme === 'forest'; // en el modo historia, el bosque tiene lobos en vez de zombies
     this.level = 1; this.score = 0; this.lives = 3; this.ok = 0; this.bad = 0; this.kills = 0; this.levelKills = 0;
     this.p = { x: W / 2, y: H / 2, r: 14, a: 0, inv: 2 };
     this.zs = []; this.bullets = []; this.parts = []; this.spawnT = 1; this.fireT = 0; this.door = null; this.shock = 0; this.time = 0;
-    this.banner = { text: 'Nivel 1 — ¡Elimina zombies para abrir la salida!', t: 3 };
+    this.maxAmmo = 10; this.ammo = 10; this.reloadT = 0; // munición: hay que recargar, así no se puede disparar sin parar
+    this.trees = [...Array(26)].map(() => ({ x: Math.random(), y: Math.random(), r: rand(18, 38), k: Math.random() }));
+    this.banner = { text: `Nivel 1 — ¡Elimina ${this.forest ? 'lobos' : 'zombies'} para abrir la salida!`, t: 3 };
     this.autoAim = store.get('ej_autoaim', true); this.pk = {};
     const btn = $('#optBtn'); btn.hidden = false;
     btn.onclick = () => { this.setAim(!this.autoAim); btn.blur(); };
@@ -920,8 +1000,8 @@ GAMES.zombie = class {
     $('#gameScreen').classList.toggle('manualAim', !on);
     $('#optBtn').textContent = on ? '🎯 Modo: asistido (cambiar con M)' : '⌨️ Modo: manual (cambiar con M)';
     $('#help').textContent = on
-      ? 'Mover: WASD o flechas · La mira apunta sola al zombie más cercano · DISPARAR: mantén ESPACIO o clic · M: modo manual'
-      : 'Mover: WASD o flechas · APUNTAR: mueve el cursor con el touchpad o mouse (360°) · dispara solo hacia la mira · M: modo asistido';
+      ? 'Mover: WASD o flechas · La mira apunta sola (no es perfecta) · DISPARAR: ESPACIO o clic · 10 balas, R recarga · M: modo manual · En celular: toca donde ir'
+      : 'Mover: WASD o flechas · APUNTAR: cursor del touchpad o mouse (360°) · dispara solo hacia la mira · 10 balas, R recarga · M: modo asistido';
     this.banner = { text: on ? 'Modo asistido: muévete con WASD y dispara con ESPACIO' : 'Modo manual: muévete con WASD o flechas · apunta con el touchpad (dispara solo)', t: 4.5 };
   }
   nearest(range) {
@@ -929,12 +1009,16 @@ GAMES.zombie = class {
     return near;
   }
   get target() { return 6 + this.level * 4; }
-  hud() { return `<span>${hearts(this.lives)}</span><span>Nivel ${this.level}</span><span>⭐ ${this.score}</span><span>🧟 ${Math.min(this.levelKills, this.target)}/${this.target}${this.door ? ' · 🚪 ¡Ve a la salida!' : ''}</span>`; }
+  hud() {
+    const ammo = this.reloadT > 0 ? '🔄 recargando…' : `🔫 ${this.ammo}/${this.maxAmmo}`;
+    return `<span>${hearts(this.lives)}</span><span>Nivel ${this.level}</span><span>⭐ ${this.score}</span><span>${ammo}</span><span>${this.forest ? '🐺' : '🧟'} ${Math.min(this.levelKills, this.target)}/${this.target}${this.door ? ' · 🚪 ¡Ve a la salida!' : ''}</span>`;
+  }
   spawn() {
     const side = Math.random() * 4 | 0, m = 30;
     const x = side === 0 ? -m : side === 1 ? W + m : rand(0, W), y = side === 2 ? -m : side === 3 ? H + m : rand(0, H);
-    const big = this.level >= 3 && Math.random() < 0.18;
-    this.zs.push({ x: side < 2 ? x : x, y: side < 2 ? rand(0, H) : y, r: big ? 22 : 14, hp: big ? 3 : 1, sp: (big ? 35 : 48) + this.level * 7 + rand(-8, 14), wob: rand(0, 6) });
+    const big = this.level >= 3 && Math.random() < 0.2, fast = !big && this.level >= 2 && Math.random() < 0.15 + this.level * 0.03;
+    const sp = (big ? 42 : fast ? 95 : 58) + this.level * 9 + rand(-8, 14);
+    this.zs.push({ x, y: side < 2 ? rand(0, H) : y, r: big ? 22 : fast ? 11 : 14, hp: big ? 3 : this.level >= 4 && Math.random() < 0.4 ? 2 : 1, sp, fast, wob: rand(0, 6) });
   }
   burst(x, y, col = '#7fbf4f', n = 12) { for (let i = 0; i < n; i++) { const a = rand(0, 6.28), s = rand(40, 200); this.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, t: rand(.3, .7), col }); } }
   update(dt) {
@@ -960,7 +1044,7 @@ GAMES.zombie = class {
         let da = ((want - p.a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
         p.a += da * Math.min(1, dt * 18);
         this.aimZ = near;
-        if (touch.active) shooting = Math.abs(da) < 0.35; // en celular dispara solo
+        if (touch.active) shooting = Math.abs(da) < 0.35; // en celular dispara solo (pero con munición limitada)
       }
     } else {
       // manual: la mira sigue al cursor (touchpad/mouse) en 360° y dispara solo; J / L también la giran
@@ -970,13 +1054,19 @@ GAMES.zombie = class {
       if (!this.keyAim && mouse.mt) p.a = Math.atan2(mouse.y - p.y, mouse.x - p.x);
       shooting = true;
     }
-    if (shooting && this.fireT <= 0) {
-      this.fireT = 0.17;
-      this.bullets.push({ x: p.x + Math.cos(p.a) * 20, y: p.y + Math.sin(p.a) * 20, vx: Math.cos(p.a) * 650, vy: Math.sin(p.a) * 650, t: 1.2 });
+    // recarga: automática al vaciar el cargador, o con R
+    if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) this.ammo = this.maxAmmo; }
+    else if (keys.r && this.ammo < this.maxAmmo) this.reloadT = 1.4;
+    if (shooting && this.fireT <= 0 && this.reloadT <= 0 && this.ammo > 0) {
+      const helped = this.autoAim || touch.active;
+      this.fireT = helped ? 0.26 : 0.17; this.ammo--;
+      const a = p.a + rand(-1, 1) * (helped ? 0.13 : 0.04); // la ayuda de puntería no es perfecta
+      this.bullets.push({ x: p.x + Math.cos(a) * 20, y: p.y + Math.sin(a) * 20, vx: Math.cos(a) * 650, vy: Math.sin(a) * 650, t: 1.2 });
+      if (this.ammo === 0) this.reloadT = 1.4;
     }
 
     this.spawnT -= dt;
-    if (this.spawnT <= 0 && this.zs.length < 5 + this.level * 3) { this.spawn(); this.spawnT = Math.max(0.3, 1.5 - this.level * 0.13) * rand(0.6, 1.25); }
+    if (this.spawnT <= 0 && this.zs.length < 7 + this.level * 4) { this.spawn(); this.spawnT = Math.max(0.2, 1.15 - this.level * 0.12) * rand(0.6, 1.25); }
 
     for (const b of this.bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.t -= dt; }
     for (const z of this.zs) {
@@ -1005,7 +1095,7 @@ GAMES.zombie = class {
   }
   async caught() {
     this.paused = true; clearInput();
-    const res = await askQuestion({ title: '🧟 ¡Un zombie te atrapó!', sub: 'Responde bien para salvarte (tienes 25 segundos)', time: 25 });
+    const res = await askQuestion({ title: this.forest ? '🐺 ¡Un lobo te alcanzó!' : '🧟 ¡Un zombie te atrapó!', sub: 'Responde bien para salvarte (tienes 25 segundos)', time: 25 });
     if (res === null || game !== this) return;
     const p = this.p;
     if (res) {
@@ -1018,15 +1108,20 @@ GAMES.zombie = class {
       if (this.lives > 0) this.banner = { text: `Te mordieron… te quedan ${this.lives} vidas`, t: 1.8 };
     }
     p.inv = 1.6; clearInput();
-    if (this.lives <= 0) return endGame(this, '🧟 Te convertiste en zombie');
+    if (this.lives <= 0) return endGame(this, this.forest ? '🐺 Los lobos te atraparon' : '🧟 Te convertiste en zombie');
     this.paused = false;
   }
   draw() {
     const c = ctx, p = this.p;
-    c.fillStyle = '#14181a'; c.fillRect(0, 0, W, H);
-    c.strokeStyle = '#1c2224'; c.lineWidth = 1;
-    for (let x = 0; x < W; x += 40) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke(); }
-    for (let y = 0; y < H; y += 40) { c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+    if (this.forest) { // suelo de bosque con hojas y copas de árboles
+      c.fillStyle = '#1f3a24'; c.fillRect(0, 0, W, H);
+      for (const t of this.trees) { c.fillStyle = t.k > 0.5 ? '#26462b' : '#2c4f2f'; c.beginPath(); c.arc(t.x * W, t.y * H, t.r * 1.6, 0, 7); c.fill(); }
+    } else {
+      c.fillStyle = '#14181a'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = '#1c2224'; c.lineWidth = 1;
+      for (let x = 0; x < W; x += 40) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke(); }
+      for (let y = 0; y < H; y += 40) { c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+    }
     if (this.door) {
       const d = this.door, g = 0.5 + Math.sin(this.time * 6) * 0.5;
       c.fillStyle = `rgba(110,231,160,${0.15 + g * 0.2})`; c.beginPath(); c.arc(d.x, d.y, 44, 0, 7); c.fill();
@@ -1041,9 +1136,23 @@ GAMES.zombie = class {
     c.fillStyle = '#ffe27a'; for (const b of this.bullets) { c.beginPath(); c.arc(b.x, b.y, 3, 0, 7); c.fill(); }
     for (const z of this.zs) {
       const a = z.face || 0;
+      if (this.forest) { // lobo visto desde arriba
+        c.save(); c.translate(z.x, z.y); c.rotate(a);
+        const r = z.r, run = Math.sin(this.time * 14 + z.wob) * r * 0.25, fur = z.fast ? '#6b6f78' : z.r > 15 ? '#4a4d55' : '#8a8f99';
+        c.fillStyle = fur; c.strokeStyle = '#1b1e2b'; c.lineWidth = 1.5;
+        for (const s of [-1, 1]) for (const f of [0.6, -0.7]) { c.beginPath(); c.ellipse(r * f + (f > 0 ? run : -run) * s, s * r * 0.55, r * 0.25, r * 0.12, 0, 0, 7); c.fill(); }
+        c.beginPath(); c.moveTo(-r * 1.1, 0); c.quadraticCurveTo(-r * 1.9, Math.sin(this.time * 8 + z.wob) * r * 0.5, -r * 2.1, 0); c.lineWidth = r * 0.35; c.strokeStyle = fur; c.stroke();
+        c.lineWidth = 1.5; c.strokeStyle = '#1b1e2b';
+        c.beginPath(); c.ellipse(0, 0, r * 1.15, r * 0.62, 0, 0, 7); c.fill(); c.stroke();
+        c.beginPath(); c.ellipse(r * 1.15, 0, r * 0.55, r * 0.45, 0, 0, 7); c.fill(); c.stroke();
+        c.beginPath(); c.moveTo(r * 1.55, -r * 0.15); c.lineTo(r * 1.95, 0); c.lineTo(r * 1.55, r * 0.15); c.fill();
+        c.fillStyle = fur; for (const s of [-1, 1]) { c.beginPath(); c.moveTo(r * 0.9, s * r * 0.25); c.lineTo(r * 0.75, s * r * 0.65); c.lineTo(r * 1.15, s * r * 0.35); c.fill(); }
+        c.fillStyle = '#ffd23f'; for (const s of [-1, 1]) { c.beginPath(); c.arc(r * 1.35, s * r * 0.18, r * 0.09, 0, 7); c.fill(); }
+        c.restore(); continue;
+      }
       c.strokeStyle = '#4c7a33'; c.lineWidth = z.r * 0.45; c.lineCap = 'round';
       for (const s of [-1, 1]) { c.beginPath(); c.moveTo(z.x + Math.cos(a + s * 0.9) * z.r * 0.7, z.y + Math.sin(a + s * 0.9) * z.r * 0.7); c.lineTo(z.x + Math.cos(a + s * 0.35) * z.r * 1.7, z.y + Math.sin(a + s * 0.35) * z.r * 1.7); c.stroke(); }
-      c.fillStyle = z.r > 15 ? '#5d8f3c' : '#79b04f'; c.beginPath(); c.arc(z.x, z.y, z.r, 0, 7); c.fill();
+      c.fillStyle = z.r > 15 ? '#5d8f3c' : z.fast ? '#c2d14a' : '#79b04f'; c.beginPath(); c.arc(z.x, z.y, z.r, 0, 7); c.fill();
       c.fillStyle = '#ff3b3b';
       for (const s of [-1, 1]) { c.beginPath(); c.arc(z.x + Math.cos(a + s * 0.5) * z.r * 0.55, z.y + Math.sin(a + s * 0.5) * z.r * 0.55, z.r * 0.16, 0, 7); c.fill(); }
     }
@@ -2161,6 +2270,366 @@ GAMES.penal = class {
       c.globalAlpha = Math.min(1, this.msg.t * 2); c.font = 'bold 26px system-ui'; c.textAlign = 'center';
       c.fillStyle = '#000a'; c.fillRect(0, gy + gh + 30, W, 46);
       c.fillStyle = this.msg.ok ? '#ffd23f' : '#ff8a8a'; c.fillText(this.msg.text, W / 2, gy + gh + 62); c.globalAlpha = 1;
+    }
+  }
+};
+
+/* ============ MODO HISTORIA: mapa, fichas y tu casa ============ */
+let STORY = Object.assign({ house: null, coins: 0, owned: [], zones: {} }, store.get('ej_story', {}));
+const saveStory = () => { store.set('ej_story', STORY); cloudSave(); };
+const HOUSES = [
+  { id: 'casa', name: 'Casa', icon: '🏡' }, { id: 'castillo', name: 'Castillo', icon: '🏰' },
+  { id: 'piramide', name: 'Pirámide', icon: '🔺' }, { id: 'iglu', name: 'Iglú', icon: '❄️' }, { id: 'arbol', name: 'Casa del árbol', icon: '🌳' }
+];
+const SHOP = [
+  { id: 'techo', name: 'Arreglar el techo', cost: 20, icon: '🛠️', cat: 'arreglos' },
+  { id: 'puerta', name: 'Puerta nueva', cost: 25, icon: '🚪', cat: 'arreglos' },
+  { id: 'ventanas', name: 'Ventanas nuevas', cost: 30, icon: '🪟', cat: 'arreglos' },
+  { id: 'paredes', name: 'Reparar grietas', cost: 35, icon: '🧱', cat: 'arreglos' },
+  { id: 'pintura', name: 'Pintura nueva', cost: 45, icon: '🎨', cat: 'arreglos' },
+  { id: 'flores', name: 'Jardín de flores', cost: 25, icon: '🌷', cat: 'deco' },
+  { id: 'arbolito', name: 'Árbol', cost: 30, icon: '🌳', cat: 'deco' },
+  { id: 'farol', name: 'Farol', cost: 35, icon: '🏮', cat: 'deco' },
+  { id: 'cerca', name: 'Cerca de madera', cost: 40, icon: '🪵', cat: 'deco' },
+  { id: 'bandera', name: 'Bandera de Chile', cost: 40, icon: '🚩', cat: 'deco' },
+  { id: 'gato', name: 'Gato', cost: 50, icon: '🐈', cat: 'deco' },
+  { id: 'perro', name: 'Perro', cost: 55, icon: '🐕', cat: 'deco' },
+  { id: 'resbalin', name: 'Resbalín', cost: 65, icon: '🛝', cat: 'deco' },
+  { id: 'fuente', name: 'Fuente', cost: 80, icon: '⛲', cat: 'deco' },
+  { id: 'auto', name: 'Auto', cost: 120, icon: '🚗', cat: 'deco' },
+  { id: 'piscina', name: 'Piscina', cost: 150, icon: '🏊', cat: 'deco' },
+  { id: 'estatua', name: 'Trofeo gigante de oro', cost: 250, icon: '🏆', cat: 'deco' }
+];
+const owns = id => STORY.owned.includes(id);
+const housePct = () => Math.round(STORY.owned.length / SHOP.length * 100);
+const EMOJI_FONT = '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui';
+
+// dibuja la casa elegida; lo que no has arreglado se ve dañado
+function drawHouse(c, type, cx, gy, s) {
+  const ink = '#1b1e2b', lw = Math.max(1, s * 0.012), fresh = owns('pintura');
+  c.save(); c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = ink; c.lineWidth = lw;
+  const grad = (x0, y0, x1, y1, a, b) => { const g = c.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, a); g.addColorStop(1, b); return g; };
+  const P = (pts, fill) => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.fillStyle = fill; c.fill(); c.stroke(); };
+  const R = (x, y, w, h, fill, r = 0) => { c.beginPath(); c.roundRect(x, y, w, h, r); c.fillStyle = fill; c.fill(); c.stroke(); };
+  const win = (x, y, w, h) => {
+    if (owns('ventanas')) {
+      R(x, y, w, h, grad(x, y, x + w, y + h, '#d8f0ff', '#5a86b8'), w * 0.1);
+      c.beginPath(); c.moveTo(x + w / 2, y); c.lineTo(x + w / 2, y + h); c.moveTo(x, y + h / 2); c.lineTo(x + w, y + h / 2); c.stroke();
+      c.fillStyle = '#ffffff70'; c.fillRect(x + w * 0.1, y + h * 0.1, w * 0.25, h * 0.25);
+    } else { // tapiada con tablas
+      R(x, y, w, h, '#2a2420');
+      c.save(); c.strokeStyle = '#9c6b3c'; c.lineWidth = Math.max(2, h * 0.16); c.beginPath();
+      c.moveTo(x - w * 0.05, y + h * 0.25); c.lineTo(x + w * 1.05, y + h * 0.75); c.moveTo(x - w * 0.05, y + h * 0.75); c.lineTo(x + w * 1.05, y + h * 0.25); c.stroke(); c.restore();
+    }
+  };
+  const door = (x, y, w, h, arch) => {
+    if (owns('puerta')) {
+      c.beginPath();
+      if (arch) { c.moveTo(x, y + h); c.lineTo(x, y + w / 2); c.arc(x + w / 2, y + w / 2, w / 2, Math.PI, 0); c.lineTo(x + w, y + h); c.closePath(); } else c.roundRect(x, y, w, h, w * 0.12);
+      c.fillStyle = grad(x, y, x + w, y, '#9c6b3c', '#5c3820'); c.fill(); c.stroke();
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(x + w * 0.78, y + h * 0.58, Math.max(1.5, w * 0.07), 0, 7); c.fill();
+    } else { // puerta rota, colgando
+      c.save(); c.translate(x, y + h); c.rotate(-0.14);
+      R(0, -h, w * 0.9, h, '#4a3424'); c.strokeStyle = '#2a1d14';
+      for (let i = 1; i < 4; i++) { c.beginPath(); c.moveTo(0, -h * i / 4); c.lineTo(w * 0.9, -h * i / 4 + h * 0.06); c.stroke(); }
+      c.restore();
+    }
+  };
+  const cracks = (x, y, w, h) => {
+    if (owns('paredes')) return;
+    c.save(); c.strokeStyle = '#2a2420'; c.lineWidth = lw * 1.3;
+    for (const [fx, fy] of [[0.15, 0.15], [0.78, 0.3], [0.42, 0.62]]) {
+      let px = x + w * fx, py = y + h * fy; c.beginPath(); c.moveTo(px, py);
+      for (let i = 0; i < 4; i++) { px += (i % 2 ? 1 : -1) * w * 0.035; py += h * 0.07; c.lineTo(px, py); }
+      c.stroke();
+    }
+    c.restore();
+  };
+  const holes = pts => {
+    if (owns('techo')) return;
+    c.fillStyle = '#1b1410';
+    for (const [hx, hy, r] of pts) { c.beginPath(); for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2, rr = r * (0.65 + ((i * 37) % 5) / 9); c.lineTo(hx + Math.cos(a) * rr, hy + Math.sin(a) * rr * 0.7); } c.fill(); }
+  };
+  const dirt = clipPath => {
+    if (fresh) return;
+    c.save(); clipPath(); c.clip();
+    c.fillStyle = 'rgba(80,62,45,.3)'; c.fillRect(cx - s * 2, gy - s * 2.2, s * 4, s * 2.3);
+    c.fillStyle = 'rgba(55,42,30,.25)';
+    for (let i = 0; i < 10; i++) { c.beginPath(); c.arc(cx + Math.sin(i * 12.9) * 0.55 * s, gy - (0.1 + Math.abs(Math.cos(i * 7.3)) * 0.6) * s, s * 0.05, 0, 7); c.fill(); }
+    c.restore();
+  };
+  c.fillStyle = '#0003'; c.beginPath(); c.ellipse(cx, gy, s * 0.8, s * 0.09, 0, 0, 7); c.fill();
+  let top = gy - s, flagX = cx;
+  if (type === 'castillo') {
+    const w = s * 1.05, h = s * 0.5, x = cx - w / 2, y = gy - h, stone = fresh ? '#c3c7d0' : '#8f9196', tw = s * 0.3, th = s * 0.86;
+    for (const sx of [x - tw * 0.55, x + w - tw * 0.45]) {
+      R(sx, gy - th, tw, th, grad(sx, 0, sx + tw, 0, stone, shade(stone, -0.28))); cracks(sx, gy - th, tw, th);
+      P([[sx - tw * 0.12, gy - th], [sx + tw / 2, gy - th - s * 0.4], [sx + tw * 1.12, gy - th]], fresh ? '#2b59c3' : '#4b587a');
+      holes([[sx + tw * 0.5, gy - th - s * 0.13, s * 0.045]]);
+      win(sx + tw * 0.33, gy - th + th * 0.22, tw * 0.34, th * 0.16);
+    }
+    R(x, y, w, h, grad(x, y, x + w, y, stone, shade(stone, -0.22)));
+    const n = 6, mw = w / (n * 2 - 1); for (let i = 0; i < n; i++) R(x + i * 2 * mw, y - mw * 0.9, mw, mw * 0.9, stone);
+    c.save(); c.strokeStyle = '#00000025'; for (let yy = y + h * 0.2; yy < gy - 2; yy += h * 0.2) { c.beginPath(); c.moveTo(x, yy); c.lineTo(x + w, yy); c.stroke(); } c.restore();
+    cracks(x, y, w, h); dirt(() => { c.beginPath(); c.rect(x, y, w, h); c.rect(x - tw * 0.55, gy - th, tw, th); c.rect(x + w - tw * 0.45, gy - th, tw, th); });
+    win(x + w * 0.14, y + h * 0.25, w * 0.12, h * 0.3); win(x + w * 0.74, y + h * 0.25, w * 0.12, h * 0.3);
+    door(cx - w * 0.12, y + h * 0.28, w * 0.24, h * 0.72, true);
+    top = gy - th - s * 0.4; flagX = x - tw * 0.55 + tw / 2;
+  } else if (type === 'piramide') {
+    const w = s * 1.4, h = s * 0.9, sand = fresh ? '#ecc76a' : '#bda06a', steps = 7;
+    for (let i = 0; i < steps; i++) { const ww = w * (1 - i / steps), hh = h / steps, x = cx - ww / 2, y = gy - hh * (i + 1); R(x, y, ww, hh, grad(x, y, x + ww, y, shade(sand, 0.1), shade(sand, -0.3))); }
+    holes([[cx - w * 0.14, gy - h * 0.62, s * 0.05], [cx + w * 0.16, gy - h * 0.38, s * 0.06]]);
+    cracks(cx - w * 0.3, gy - h * 0.55, w * 0.6, h * 0.5);
+    dirt(() => { c.beginPath(); c.moveTo(cx - w / 2, gy); c.lineTo(cx, gy - h); c.lineTo(cx + w / 2, gy); c.closePath(); });
+    win(cx - w * 0.2, gy - h * 0.45, w * 0.07, h * 0.1); win(cx + w * 0.13, gy - h * 0.45, w * 0.07, h * 0.1);
+    door(cx - w * 0.06, gy - h * 0.3, w * 0.12, h * 0.3, true);
+    top = gy - h;
+  } else if (type === 'iglu') {
+    const r = s * 0.58, ice = fresh ? '#eef8ff' : '#c4d1da';
+    const dome = () => { c.beginPath(); c.arc(cx, gy, r, Math.PI, 0); c.closePath(); };
+    dome(); c.fillStyle = grad(cx - r, gy - r, cx + r, gy, ice, shade(ice, -0.2)); c.fill(); c.stroke();
+    c.save(); dome(); c.clip(); c.strokeStyle = '#9fb7c9';
+    for (let i = 1; i < 4; i++) { const yy = gy - r * i / 4; c.beginPath(); c.moveTo(cx - r, yy); c.lineTo(cx + r, yy); c.stroke(); for (let k = -4; k <= 4; k++) { const xx = cx + k * r * 0.28 + (i % 2) * r * 0.14; c.beginPath(); c.moveTo(xx, yy); c.lineTo(xx, yy + r / 4); c.stroke(); } }
+    c.restore();
+    holes([[cx - r * 0.35, gy - r * 0.72, s * 0.05], [cx + r * 0.25, gy - r * 0.82, s * 0.04]]); cracks(cx - r * 0.7, gy - r * 0.7, r * 1.4, r * 0.6);
+    dirt(dome);
+    c.beginPath(); c.arc(cx + r * 0.78, gy, r * 0.4, Math.PI, 0); c.closePath(); c.fillStyle = grad(0, gy - r * 0.4, 0, gy, ice, shade(ice, -0.15)); c.fill(); c.stroke();
+    door(cx + r * 0.62, gy - r * 0.3, r * 0.32, r * 0.3, true);
+    win(cx - r * 0.5, gy - r * 0.48, r * 0.26, r * 0.2);
+    top = gy - r; flagX = cx;
+  } else if (type === 'arbol') {
+    const tw = s * 0.22, th = s * 0.95, bx = cx - tw / 2, leaf = fresh ? '#4caf50' : '#6b8e5a';
+    R(bx, gy - th, tw, th, grad(bx, 0, bx + tw, 0, '#9c6b3c', '#5c3820'));
+    for (const [ox, oy, rr] of [[-0.42, -1.2, 0.36], [0.42, -1.2, 0.36], [0, -1.42, 0.44], [-0.18, -1.02, 0.3], [0.22, -1.0, 0.3]]) { c.beginPath(); c.arc(cx + ox * s, gy + oy * s, rr * s, 0, 7); c.fillStyle = grad(0, gy + (oy - rr) * s, 0, gy + (oy + rr) * s, shade(leaf, 0.15), shade(leaf, -0.2)); c.fill(); c.stroke(); }
+    const hw = s * 0.64, hh = s * 0.36, hx = cx - hw / 2, hy = gy - s * 0.9;
+    R(hx - hw * 0.12, hy + hh, hw * 1.24, s * 0.045, '#6b4226');
+    R(hx, hy, hw, hh, grad(hx, hy, hx + hw, hy, fresh ? '#deb07d' : '#a8876a', '#8b5a2b')); cracks(hx, hy, hw, hh); dirt(() => { c.beginPath(); c.rect(hx, hy, hw, hh); });
+    P([[hx - hw * 0.1, hy], [cx, hy - s * 0.26], [hx + hw * 1.1, hy]], fresh ? '#c0392b' : '#7d5a4c'); holes([[cx + hw * 0.15, hy - s * 0.09, s * 0.045]]);
+    win(hx + hw * 0.1, hy + hh * 0.22, hw * 0.25, hh * 0.4); door(hx + hw * 0.6, hy + hh * 0.28, hw * 0.25, hh * 0.72);
+    c.strokeStyle = '#6b4226'; c.lineWidth = Math.max(2, s * 0.022); const lx = cx + tw * 0.85;
+    c.beginPath(); c.moveTo(lx, gy); c.lineTo(lx, hy + hh); c.moveTo(lx + s * 0.11, gy); c.lineTo(lx + s * 0.11, hy + hh);
+    for (let yy = gy - s * 0.08; yy > hy + hh; yy -= s * 0.08) { c.moveTo(lx, yy); c.lineTo(lx + s * 0.11, yy); }
+    c.stroke(); c.strokeStyle = ink; c.lineWidth = lw;
+    top = gy - s * 1.86; flagX = cx;
+  } else { // casa
+    const w = s, h = s * 0.6, x = cx - w / 2, y = gy - h, wall = fresh ? '#f4d6a0' : '#c2ad8a';
+    R(cx + w * 0.22, y - s * 0.4, s * 0.12, s * 0.32, fresh ? '#b5543c' : '#7d5a4c');
+    R(x, y, w, h, grad(x, y, x + w, y, wall, shade(wall, -0.18)));
+    cracks(x, y, w, h); dirt(() => { c.beginPath(); c.rect(x, y, w, h); });
+    P([[x - w * 0.09, y], [cx, y - s * 0.46], [x + w * 1.09, y]], grad(0, y - s * 0.46, 0, y, fresh ? '#d9483b' : '#86534a', fresh ? '#a5281e' : '#5e3a33'));
+    holes([[cx - w * 0.18, y - s * 0.15, s * 0.06], [cx + w * 0.22, y - s * 0.1, s * 0.05]]);
+    win(x + w * 0.1, y + h * 0.2, w * 0.22, h * 0.32); win(x + w * 0.68, y + h * 0.2, w * 0.22, h * 0.32);
+    door(cx - w * 0.1, y + h * 0.4, w * 0.2, h * 0.6);
+    top = y - s * 0.46;
+  }
+  c.restore();
+  return { top, flagX };
+}
+// decoración comprada alrededor de la casa (back = lo que va detrás)
+function drawDecor(c, cx, gy, s, info, back, t = 0) {
+  const E = (emo, x, y, size) => {
+    c.fillStyle = '#0003'; c.beginPath(); c.ellipse(x, y, size * 0.38, size * 0.08, 0, 0, 7); c.fill();
+    c.fillStyle = '#000'; c.font = `${Math.round(size)}px ${EMOJI_FONT}`; c.textAlign = 'center'; c.textBaseline = 'alphabetic'; c.fillText(emo, x, y + size * 0.08);
+  };
+  if (back) {
+    if (owns('cerca')) {
+      c.fillStyle = '#b07a46'; c.strokeStyle = '#5c3820'; c.lineWidth = Math.max(1, s * 0.01);
+      for (const side of [-1, 1]) {
+        c.fillRect(cx + side * s * 0.95 - (side > 0 ? 0 : s * 1.1), gy - s * 0.12, s * 1.1, s * 0.03);
+        c.fillRect(cx + side * s * 0.95 - (side > 0 ? 0 : s * 1.1), gy - s * 0.06, s * 1.1, s * 0.03);
+        for (let k = 0; k <= 6; k++) { const px = cx + side * (s * 0.95 + k * s * 0.18); c.beginPath(); c.moveTo(px - s * 0.03, gy); c.lineTo(px - s * 0.03, gy - s * 0.16); c.lineTo(px, gy - s * 0.2); c.lineTo(px + s * 0.03, gy - s * 0.16); c.lineTo(px + s * 0.03, gy); c.closePath(); c.fill(); c.stroke(); }
+      }
+    }
+    if (owns('arbolito')) E('🌳', cx - s * 1.35, gy, s * 0.6);
+    return;
+  }
+  if (owns('bandera')) { // mástil con bandera chilena ondeando
+    const px = info.flagX, py = info.top;
+    c.strokeStyle = '#ccc'; c.lineWidth = Math.max(2, s * 0.015); c.beginPath(); c.moveTo(px, py); c.lineTo(px, py - s * 0.32); c.stroke();
+    c.save(); c.translate(px, py - s * 0.32); c.transform(1, Math.sin(t * 3) * 0.06, 0, 1, 0, 0); drawFlag(c, 'chile', 0, 0, s * 0.24, s * 0.16); c.restore();
+  }
+  if (owns('piscina')) {
+    const px = cx + s * 1.1, py = gy + s * 0.3;
+    c.fillStyle = '#e8e2d0'; c.beginPath(); c.ellipse(px, py, s * 0.42, s * 0.13, 0, 0, 7); c.fill();
+    const g = c.createLinearGradient(px - s * 0.4, 0, px + s * 0.4, 0); g.addColorStop(0, '#4cc9f0'); g.addColorStop(1, '#1d7fc1');
+    c.fillStyle = g; c.beginPath(); c.ellipse(px, py, s * 0.36, s * 0.1, 0, 0, 7); c.fill();
+    c.strokeStyle = '#ffffff90'; c.lineWidth = 2; c.beginPath(); c.ellipse(px + Math.sin(t) * s * 0.05, py, s * 0.18, s * 0.04, 0, 0, Math.PI); c.stroke();
+  }
+  if (owns('flores')) for (let k = 0; k < 4; k++) { E(k % 2 ? '🌼' : '🌷', cx - s * 0.75 + k * s * 0.1, gy + s * 0.07, s * 0.16); E(k % 2 ? '🌷' : '🌻', cx + s * 0.48 + k * s * 0.1, gy + s * 0.07, s * 0.16); }
+  if (owns('fuente')) E('⛲', cx - s * 1.05, gy + s * 0.28, s * 0.4);
+  if (owns('farol')) E('🏮', cx + s * 0.95, gy - s * 0.02, s * 0.3);
+  if (owns('gato')) E('🐈', cx - s * 0.32, gy + s * 0.2, s * 0.22);
+  if (owns('perro')) E('🐕', cx + s * 0.3, gy + s * 0.22 + Math.abs(Math.sin(t * 4)) * -s * 0.02, s * 0.26);
+  if (owns('resbalin')) E('🛝', cx + s * 1.45, gy + s * 0.02, s * 0.42);
+  if (owns('auto')) E('🚗', cx - s * 1.6, gy + s * 0.16, s * 0.36);
+  if (owns('estatua')) E('🏆', cx + s * 1.75, gy + s * 0.05, s * 0.5);
+}
+
+// lugares del mapa: cada uno es un minijuego con la materia que elijas
+const PLACES = [
+  { id: 'casa', name: 'Tu casa', icon: '🏠', x: 0.5, y: 0.5, house: true },
+  { id: 'bosque', name: 'Bosque', icon: '🌲', x: 0.15, y: 0.24, game: 'zombie', theme: 'forest', desc: 'Te persiguen lobos' },
+  { id: 'estadio', name: 'Estadio', icon: '🏟️', x: 0.85, y: 0.24, game: 'penal', desc: 'Tanda de penales' },
+  { id: 'huerto', name: 'Huerto', icon: '🍎', x: 0.5, y: 0.13, game: 'catch', desc: 'Atrapa la respuesta' },
+  { id: 'cueva', name: 'Cueva', icon: '🕳️', x: 0.15, y: 0.78, game: 'maze', desc: 'Laberinto con bichos' },
+  { id: 'estacion', name: 'Estación', icon: '🚉', x: 0.85, y: 0.78, game: 'runner', desc: 'Escapa del profe' },
+  { id: 'biblioteca', name: 'Biblioteca', icon: '📚', x: 0.5, y: 0.9, game: 'review', desc: 'Repaso tranquilo' }
+];
+const placeSubject = pl => SUBJECTS.find(s => s.id === STORY.zones[pl.id]) || CUR;
+
+GAMES.world = class {
+  constructor(opts = {}) {
+    this.meta = true; this.score = 0; this.ok = 0; this.bad = 0; this.time = 0; this.near = null; this.target = null;
+    const home = PLACES[0]; this.p = { x: W * home.x, y: H * home.y + 50, dir: 1 };
+    this.deco = [...Array(40)].map((_, i) => ({ x: Math.random(), y: Math.random(), k: i % 4, r: rand(10, 22) }));
+    this.banner = opts.coinsMsg ? { text: `🪙 ¡Ganaste ${opts.coinsMsg} fichas! Ve a tu casa a gastarlas`, t: 3.5 }
+      : { text: 'Camina a un lugar para jugar · cada lugar usa la materia que elijas', t: 4 };
+    $('#help').textContent = 'Camina con WASD / flechas, o haz clic (o toca) donde quieras ir. Acércate a un lugar para entrar.';
+  }
+  stop() { $('#storyPanel').style.display = 'none'; }
+  hud() { return `<span>🗺️ Modo Historia</span><span>🪙 ${STORY.coins} fichas</span><span>🏠 ${housePct()}% de tu casa</span>`; }
+  pos(pl) { return { x: W * pl.x, y: H * pl.y }; }
+  enter(pl) {
+    if (pl.house) return startGame('house');
+    const subj = placeSubject(pl);
+    if (!subj.questions.length) { this.banner = { text: `📁 ${subj.name} no tiene preguntas: elige otra materia`, t: 3 }; return; }
+    startGame(pl.game, { story: true, zone: pl.id, subject: subj.id, theme: pl.theme });
+  }
+  renderPanel() {
+    const el = $('#storyPanel'), pl = this.near;
+    if (!pl) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    if (pl.house) {
+      const h = HOUSES.find(x => x.id === STORY.house);
+      el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b><br><small>${h ? h.icon + ' ' + h.name + ' · ' + housePct() + '% terminada' : 'Todavía no eliges tu hogar'} · 🪙 ${STORY.coins} fichas</small></div><button class="primary" data-enter>Entrar ▶</button></div>`;
+    } else {
+      const subj = placeSubject(pl);
+      el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b> · <small>${pl.desc}</small><br>
+        <label><small>Preguntas de:</small> <select data-subj>${SUBJECTS.map(s => `<option value="${s.id}"${s === subj ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select></label></div>
+        <button class="primary" data-enter>Entrar ▶</button></div>`;
+    }
+    el.onclick = e => { if (e.target.closest('[data-enter]')) this.enter(pl); };
+    el.onchange = e => { if (e.target.matches('[data-subj]')) { STORY.zones[pl.id] = e.target.value; saveStory(); } };
+  }
+  update(dt) {
+    this.time += dt;
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    const p = this.p;
+    let dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0), dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+    if (mouse.tap || touch.tap) { const t = touch.tap ? touch : mouse; this.target = { x: t.x, y: t.y }; mouse.tap = false; touch.tap = false; }
+    if (dx || dy) this.target = null;
+    if (this.target) { const tx = this.target.x - p.x, ty = this.target.y - p.y, d = Math.hypot(tx, ty); if (d < 6) this.target = null; else { dx = tx / d; dy = ty / d; } }
+    const len = Math.hypot(dx, dy) || 1, sp = 210;
+    p.x = Math.max(20, Math.min(W - 20, p.x + dx / len * sp * dt)); p.y = Math.max(30, Math.min(H - 20, p.y + dy / len * sp * dt));
+    if (dx) p.dir = dx > 0 ? 1 : -1; p.moving = !!(dx || dy);
+    let near = null; for (const pl of PLACES) { const q = this.pos(pl); if (Math.hypot(q.x - p.x, q.y - p.y) < Math.max(55, Math.min(W, H) * 0.09)) near = pl; }
+    if (near !== this.near) { this.near = near; this.renderPanel(); }
+    if (near && (keys.enter || keys.e) && !this.pk) { this.pk = true; this.enter(near); } else if (!keys.enter && !keys.e) this.pk = false;
+  }
+  draw() {
+    const c = ctx, s = Math.min(W, H);
+    let g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#7cc66b'); g.addColorStop(1, '#4f9e4a'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    // estanque y caminos
+    c.fillStyle = '#4aa8d8'; c.beginPath(); c.ellipse(W * 0.3, H * 0.52, s * 0.08, s * 0.045, 0, 0, 7); c.fill();
+    c.strokeStyle = '#ffffff60'; c.lineWidth = 2; c.beginPath(); c.ellipse(W * 0.3, H * 0.52, s * 0.05, s * 0.02, 0, 0, 7); c.stroke();
+    const home = this.pos(PLACES[0]);
+    for (const pl of PLACES.slice(1)) {
+      const q = this.pos(pl), mx = (home.x + q.x) / 2 + (q.y - home.y) * 0.15, my = (home.y + q.y) / 2;
+      for (const [w, col] of [[s * 0.05, '#c9a66b'], [s * 0.035, '#e6c98e']]) { c.strokeStyle = col; c.lineWidth = w; c.lineCap = 'round'; c.beginPath(); c.moveTo(home.x, home.y); c.quadraticCurveTo(mx, my, q.x, q.y); c.stroke(); }
+    }
+    for (const d of this.deco) { // arbustos y flores
+      const x = d.x * W, y = d.y * H; if (PLACES.some(pl => Math.hypot(this.pos(pl).x - x, this.pos(pl).y - y) < s * 0.12)) continue;
+      if (d.k < 2) { c.fillStyle = d.k ? '#3f8a3a' : '#357a32'; c.beginPath(); c.arc(x, y, d.r, 0, 7); c.arc(x + d.r * 0.7, y + 3, d.r * 0.7, 0, 7); c.fill(); }
+      else { c.fillStyle = d.k === 2 ? '#ffd23f' : '#ff7eb6'; c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill(); }
+    }
+    // lugares
+    for (const pl of PLACES) {
+      const q = this.pos(pl), r = Math.max(30, s * 0.06), hi = pl === this.near;
+      if (pl.house) {
+        if (STORY.house) { const hs = Math.max(50, s * 0.13), info = drawHouse(c, STORY.house, q.x, q.y + hs * 0.3, hs); drawDecor(c, q.x, q.y + hs * 0.3, hs, info, false, this.time); }
+        else { c.fillStyle = '#000'; c.font = `${Math.round(r * 1.4)}px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText('🏚️', q.x, q.y + r * 0.4); }
+      } else {
+        c.fillStyle = hi ? '#ffd23f80' : '#00000025'; c.beginPath(); c.ellipse(q.x, q.y + r * 0.55, r * 1.1, r * 0.4, 0, 0, 7); c.fill();
+        c.fillStyle = '#000'; c.font = `${Math.round(r * 1.5)}px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText(pl.icon, q.x, q.y + r * 0.5 + Math.sin(this.time * 3 + pl.x * 9) * (hi ? 4 : 1.5));
+      }
+      const label = pl.house ? pl.name : `${pl.name} · 📁 ${placeSubject(pl).name}`;
+      c.font = `700 ${W < 500 ? 11 : 13}px system-ui`; const tw = c.measureText(label).width + 16, ly = q.y + r * 0.95 + (pl.house ? 18 : 0);
+      const lx = Math.max(tw / 2 + 4, Math.min(W - tw / 2 - 4, q.x)); // que la etiqueta no se salga de la pantalla
+      c.fillStyle = hi ? '#ffd23f' : '#000000a0'; c.beginPath(); c.roundRect(lx - tw / 2, ly, tw, 22, 11); c.fill();
+      c.fillStyle = hi ? '#1b1e2b' : '#fff'; c.fillText(label, lx, ly + 15);
+    }
+    // jugador
+    const p = this.p, bob = p.moving ? Math.abs(Math.sin(this.time * 12)) * 4 : 0;
+    c.fillStyle = '#0004'; c.beginPath(); c.ellipse(p.x, p.y + 4, 14, 5, 0, 0, 7); c.fill();
+    c.save(); c.translate(p.x, p.y - bob); c.scale(-p.dir, 1);
+    c.fillStyle = '#000'; c.font = `34px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText('🧑‍🎓', 0, 2); c.restore();
+    if (this.target) { c.strokeStyle = '#ffffffa0'; c.lineWidth = 2; c.beginPath(); c.arc(this.target.x, this.target.y, 8 + Math.sin(this.time * 8) * 2, 0, 7); c.stroke(); }
+    if (this.banner) {
+      c.globalAlpha = Math.min(1, this.banner.t * 2); c.font = 'bold 18px system-ui'; c.textAlign = 'center';
+      const tw = Math.min(W - 20, c.measureText(this.banner.text).width + 30);
+      c.fillStyle = '#000b'; c.beginPath(); c.roundRect(W / 2 - tw / 2, 10, tw, 36, 18); c.fill();
+      c.fillStyle = '#ffd23f'; c.fillText(this.banner.text, W / 2, 34); c.globalAlpha = 1;
+    }
+  }
+};
+
+GAMES.house = class {
+  constructor() {
+    this.meta = true; this.backTo = 'world'; this.score = 0; this.ok = 0; this.bad = 0; this.time = 0; this.tab = 'arreglos'; this.flash = null;
+    $('#help').textContent = 'Gana fichas jugando en los lugares del mapa y gástalas aquí en arreglar y decorar tu hogar.';
+    this.renderPanel();
+  }
+  stop() { $('#storyPanel').style.display = 'none'; }
+  hud() { const h = HOUSES.find(x => x.id === STORY.house); return `<span>🪙 ${STORY.coins} fichas</span><span>${h ? h.icon + ' ' + h.name : '🏚️ Elige tu hogar'}</span><span>✨ ${housePct()}% terminada</span>`; }
+  renderPanel() {
+    const el = $('#storyPanel'); el.style.display = 'block';
+    if (!STORY.house) {
+      el.innerHTML = `<b>🏚️ Elige tu hogar</b> <small>(lo vas a ir arreglando con tus fichas)</small><div class="sp-grid">${HOUSES.map(h => `<button class="sp-item" data-house="${h.id}"><span class="sp-ico">${h.icon}</span>${h.name}</button>`).join('')}</div>`;
+    } else {
+      const items = SHOP.filter(i => i.cat === this.tab);
+      el.innerHTML = `<div class="sp-row" style="margin-bottom:8px"><div class="subjects"><button class="subj${this.tab === 'arreglos' ? ' on' : ''}" data-tab="arreglos">🛠️ Arreglos</button><button class="subj${this.tab === 'deco' ? ' on' : ''}" data-tab="deco">🌷 Decoración</button></div>
+        <div><b>🪙 ${STORY.coins}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button></div></div>
+        <div class="sp-grid">${items.map(i => { const have = owns(i.id), can = STORY.coins >= i.cost;
+          return `<button class="sp-item${have ? ' have' : ''}" data-buy="${i.id}" ${have || !can ? 'disabled' : ''}><span class="sp-ico">${i.icon}</span>${i.name}<small>${have ? '✔ Comprado' : '🪙 ' + i.cost}</small></button>`; }).join('')}</div>`;
+    }
+    el.onclick = e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.house) { STORY.house = b.dataset.house; saveStory(); this.flash = { text: '🎉 ¡Este es tu nuevo hogar! Arréglalo con tus fichas', t: 3 }; }
+      else if (b.dataset.tab) this.tab = b.dataset.tab;
+      else if (b.hasAttribute('data-change')) { STORY.house = null; saveStory(); }
+      else if (b.dataset.buy) {
+        const it = SHOP.find(i => i.id === b.dataset.buy);
+        if (it && !owns(it.id) && STORY.coins >= it.cost) { STORY.coins -= it.cost; STORY.owned.push(it.id); saveStory(); this.flash = { text: `${it.icon} ¡Compraste ${it.name}!`, t: 2.2 }; track('compra_casa', { item: it.id }); }
+      }
+      this.renderPanel();
+    };
+  }
+  update(dt) { this.time += dt; if (this.flash) { this.flash.t -= dt; if (this.flash.t <= 0) this.flash = null; } }
+  draw() {
+    const c = ctx, type = STORY.house || 'casa', panelH = $('#storyPanel').offsetHeight || 0;
+    const sceneH = Math.max(200, H - panelH - 20), s = Math.min(W / 4.4, sceneH * 0.42), cx = W / 2, gy = sceneH * 0.82;
+    const skies = { casa: ['#5aa9ff', '#cfe9ff', '#6dbb5a'], castillo: ['#4c79c9', '#bfe0ff', '#5c9e48'], piramide: ['#f2994a', '#ffe0a3', '#e2c27a'], iglu: ['#8fc8f0', '#eef8ff', '#f4f9ff'], arbol: ['#4f9fd8', '#d4f0d4', '#4f8f3e'] }[type];
+    let g = c.createLinearGradient(0, 0, 0, gy); g.addColorStop(0, skies[0]); g.addColorStop(1, skies[1]); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#fff6c4'; c.beginPath(); c.arc(W * 0.82, gy * 0.22, s * 0.18, 0, 7); c.fill();
+    c.fillStyle = '#ffffffb0'; for (let i = 0; i < 3; i++) { const x = ((i * 0.37 + this.time * 0.01) % 1.2) * W - 60; c.beginPath(); c.ellipse(x, gy * (0.15 + i * 0.1), 60, 18, 0, 0, 7); c.fill(); }
+    g = c.createLinearGradient(0, gy - 10, 0, H); g.addColorStop(0, skies[2]); g.addColorStop(1, shade(skies[2], -0.25)); c.fillStyle = g; c.fillRect(0, gy - 6, W, H);
+    if (!STORY.house) {
+      c.fillStyle = '#000'; c.font = `${Math.round(s * 0.9)}px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText('🏚️', cx, gy);
+      c.fillStyle = '#1b1e2b'; c.font = 'bold 20px system-ui'; c.fillText('Elige qué hogar quieres construir', cx, gy * 0.25);
+      return;
+    }
+    drawDecor(c, cx, gy, s, null, true, this.time);
+    const info = drawHouse(c, type, cx, gy, s);
+    drawDecor(c, cx, gy, s, info, false, this.time);
+    // barra de progreso
+    const pct = housePct() / 100, bw = Math.min(320, W - 40);
+    c.fillStyle = '#000a'; c.beginPath(); c.roundRect(cx - bw / 2 - 8, 10, bw + 16, 40, 12); c.fill();
+    c.fillStyle = '#ffffff30'; c.fillRect(cx - bw / 2, 34, bw, 8); c.fillStyle = '#7bd389'; c.fillRect(cx - bw / 2, 34, bw * pct, 8);
+    c.fillStyle = '#fff'; c.font = 'bold 13px system-ui'; c.textAlign = 'center'; c.fillText(`Tu hogar: ${Math.round(pct * 100)}% terminado`, cx, 27);
+    if (this.flash) {
+      c.globalAlpha = Math.min(1, this.flash.t * 2); c.font = 'bold 20px system-ui';
+      const tw = Math.min(W - 20, c.measureText(this.flash.text).width + 30);
+      c.fillStyle = '#000c'; c.beginPath(); c.roundRect(cx - tw / 2, 60, tw, 40, 20); c.fill(); c.fillStyle = '#ffd23f'; c.fillText(this.flash.text, cx, 86); c.globalAlpha = 1;
     }
   }
 };
