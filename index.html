@@ -1902,6 +1902,8 @@ GAMES.penal = class {
     this.aimPt.y = Math.max(gy - gh * 0.5, Math.min(gy + gh * 1.05, this.aimPt.y));
     return this.aimPt;
   }
+  // velocidad de la barra (subidas y bajadas por segundo): parte rápida y acelera en cada penal
+  powerSpeed() { return Math.min(6.5, 1.8 + (this.kicks || 0) * 0.5); }
   // patear con la potencia elegida: débil = fácil de atajar, verde = golazo, demasiado = se va por arriba
   shootMe(p) {
     const { gx, gy, gw, gh } = this.geo(), r = this.reticle();
@@ -1940,7 +1942,7 @@ GAMES.penal = class {
     } else if (this.phase === 'power') {
       this.powerT += dt;
       // cada penal que pateas la barra va más rápido (también si se repite)
-      const sp = Math.min(3.6, 0.9 + (this.kicks || 0) * 0.3), ph = (this.powerT * sp) % 2;
+      const sp = this.powerSpeed(), ph = (this.powerT * sp) % 2;
       this.power = ph < 1 ? ph : 2 - ph; // sube y baja
       if (click) { this.kicks = (this.kicks || 0) + 1; this.shootMe(this.power); }
     } else if (this.phase === 'save') {
@@ -2128,8 +2130,8 @@ GAMES.penal = class {
         c.fillStyle = '#fff'; c.beginPath(); c.moveTo(bx0 - 8, my - 6); c.lineTo(bx0 - 1, my); c.lineTo(bx0 - 8, my + 6); c.fill();
         c.fillRect(bx0 - 2, my - 2, bw + 4, 4);
         c.font = '700 11px system-ui'; c.fillText('POTENCIA', bx0 + bw / 2, by0 - 10);
-        const spd = Math.min(3.6, 0.9 + (this.kicks || 0) * 0.3);
-        c.fillStyle = spd > 2.5 ? '#ff6b6b' : spd > 1.6 ? '#ffb547' : '#7bd389'; c.fillText('⚡'.repeat(Math.min(5, 1 + Math.floor((spd - 0.9) / 0.6))), bx0 + bw / 2, by0 + bh + 14);
+        const spd = this.powerSpeed();
+        c.fillStyle = spd > 4 ? '#ff6b6b' : spd > 2.8 ? '#ffb547' : '#7bd389'; c.fillText('⚡'.repeat(Math.min(5, 1 + Math.floor((spd - 1.8) / 1))), bx0 + bw / 2, by0 + bh + 14);
       }
     }
     // marcador
