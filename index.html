@@ -190,7 +190,7 @@ Reglas:
       </button>
       <button class="game" data-game="runner">
         <span class="ico">🏃</span>
-        <span><b>Carrera sin fin</b><small>Corre por 3 carriles, esquiva obstáculos y cruza la puerta que tiene la respuesta correcta.</small><span class="best" data-best="runner"></span></span>
+        <span><b>Escapa del profe</b><small>Corre por la vía esquivando trenes mientras te persigue el profe. Los portones se abren respondiendo y, si te pilla, responde para escapar.</small><span class="best" data-best="runner"></span></span>
       </button>
       <button class="game" data-game="penal">
         <span class="ico">⚽</span>
@@ -606,6 +606,7 @@ function rankingUpdate(game, score) {
   if (!fbUser || !fdb || !cloudReady) return;
   const inc = firebase.firestore.FieldValue.increment, data = { name: rankName(), best: store.get('ej_best', {}), updated: Date.now() };
   if (game) { data.total = inc(Math.max(0, Math.floor(score))); data.games = inc(1); }
+  else data.total = inc(0); // crea el campo para que aparezcas aunque aún no termines una partida
   fdb.collection('ranking').doc(fbUser.uid).set(data, { merge: true }).catch(e => console.warn('ranking', e));
 }
 let rankTab = 'total';
@@ -838,6 +839,14 @@ function startGame(kind) {
 }
 function stopGame() {
   if (game && game.stop) game.stop();
+  // salir con "← Menú" a mitad de partida igual guarda los puntos ganados
+  if (game && !game.over && Math.floor(game.score) > 0) {
+    const sc = Math.floor(game.score), best = store.get('ej_best', {});
+    if (sc > (best[gameKind] || 0)) { best[gameKind] = sc; store.set('ej_best', best); cloudSave(); }
+    rankingUpdate(gameKind, sc);
+    track('juego_terminado', { juego: gameKind, puntaje: sc, correctas: game.ok, incorrectas: game.bad, abandonado: 1 });
+    game.over = true;
+  }
   game = null; closeQuestion(true); $('#optBtn').hidden = true; $('#gameScreen').classList.remove('manualAim');
   $('#gameScreen').classList.remove('on'); $('#endModal').classList.remove('on'); $('#catchQ').style.display = 'none';
   renderQuestions();
@@ -1393,13 +1402,19 @@ GAMES.runner = class {
   constructor() {
     this.score = 0; this.lives = 3; this.ok = 0; this.bad = 0; this.dist = 0; this.coins = 0; this.time = 0;
     this.speed = 15; this.lane = 0; this.px = 0; this.h = 0; this.vy = 0; this.inv = 1.5;
-    this.obs = []; this.nextRow = 25; this.nextGate = 60; this.gate = null; this.pk = {}; this.banner = null;
+    this.obs = []; this.nextRow = 25; this.nextLock = 90; this.lock = null; this.pk = {}; this.banner = null;
+    // el profe: "gap" son los metros que te lleva de ventaja; si llega a 0, te pilla
+    this.gap = 12; this.tLane = 0; this.boost = 0; this.slow = 0; this.shake = 0; this.parts = []; this.bubble = null; this.bubbleT = 3;
     this.clouds = [...Array(6)].map(() => ({ x: Math.random(), y: rand(0.12, 0.6), w: rand(40, 95), sp: rand(0.2, 0.6) }));
     this.skyline = [...Array(30)].map((_, i) => ({ x: i / 30 + rand(-0.01, 0.01), w: rand(0.03, 0.05), h: rand(0.25, 1), col: ['#9aa9cc', '#a9b6d6', '#8c9bc0'][i % 3] }));
-    $('#help').textContent = 'Carril: ←/→ o A/D · Saltar: ↑, W o espacio · En celular: desliza. Las vallas rojas se saltan, los bloques se esquivan.';
+    this.banner = { text: '👨‍🏫 ¡Corre! El profe te persigue', t: 2.5 };
+    $('#help').textContent = 'Carril: ←/→ o A/D · Saltar: ↑, W o espacio · En celular: desliza. Si chocas, el profe se acerca. Los portones 🔒 se abren respondiendo.';
   }
   stop() { $('#catchQ').style.display = 'none'; }
-  hud() { return `<span>${hearts(this.lives)}</span><span>🏃 ${Math.floor(this.dist)} m</span><span>⭐ ${Math.floor(this.score)}</span><span>🪙 ${this.coins}</span>`; }
+  hud() {
+    const g = Math.max(0, this.gap), danger = g < 4 ? '🔴' : g < 8 ? '🟡' : '🟢';
+    return `<span>${hearts(this.lives)}</span><span>🏃 ${Math.floor(this.dist)} m</span><span>⭐ ${Math.floor(this.score)}</span><span>🪙 ${this.coins}</span><span>${danger} 👨‍🏫 a ${g.toFixed(0)} m</span>`;
+  }
   press(name, on) { const was = this.pk[name]; this.pk[name] = on; return on && !was; }
   onSwipe(d) { if (d === 3) this.move(-1); else if (d === 1) this.move(1); else if (d === 0) this.jump(); }
   move(k) { this.lane = Math.max(-1, Math.min(1, this.lane + k)); }
@@ -1413,64 +1428,82 @@ GAMES.runner = class {
     const free = lanes[2];
     if (Math.random() < 0.6) for (let k = 0; k < 5; k++) this.obs.push({ type: 'coin', lane: free, z: z + k * 2.2, len: 0 });
   }
-  spawnGate(z) {
-    const { q, i } = nextQ();
-    let opts = q.options.map((t, k) => ({ text: t, correct: k === q.answer }));
-    if (opts.length > 3) opts = [opts[q.answer], ...shuffle(opts.filter(o => !o.correct)).slice(0, 2)];
-    opts = shuffle(opts);
-    const laneIds = opts.length === 3 ? [-1, 0, 1] : [-1, 1];
-    this.gate = { z, q, qi: i, opts: opts.map((o, k) => ({ ...o, lane: laneIds[k] })) };
-    const label = { '-1': '⬅ Izquierda', '0': '⬆ Centro', '1': 'Derecha ➡' };
-    const cellsHtml = [-1, 0, 1].map(l => { const o = this.gate.opts.find(o => o.lane === l); return o ? `<div><b>${label[l]}</b><br>${esc(short(o.text, 90))}</div>` : '<div class="empty"></div>'; }).join('');
-    const el = $('#catchQ'); el.innerHTML = `🚪 ${esc(q.q).replace(/\n/g, '<br>')}<div class="lanes">${cellsHtml}</div>`; el.style.display = 'block';
+  say(text) { this.bubble = { text, t: 2.2 }; }
+  dust(n, col = '#d8cbb2') {
+    for (let i = 0; i < n; i++) this.parts.push({ x: this.px + rand(-0.15, 0.15), z: rand(-0.2, 0.3), y: rand(0, 0.3), vx: rand(-0.6, 0.6), vy: rand(0.5, 2), vz: rand(-3, -1), t: rand(0.3, 0.7), col });
   }
-  passGate() {
-    const g = this.gate, lane = Math.round(this.px), o = g.opts.find(o => o.lane === lane);
-    $('#catchQ').style.display = 'none'; this.gate = null;
-    if (o && o.correct) { this.ok++; this.score += 200; this.banner = { text: '✅ ¡Correcto! +200', t: 1.5, ok: true }; }
-    else {
-      this.bad++; this.lives--; deck.splice(Math.max(0, deck.length - 3), 0, g.qi);
-      this.banner = { text: `❌ Era: ${short(g.q.options[g.q.answer], 80)}`, t: 3 };
-      if (this.lives <= 0) endGame(this, '🏃 Fin de la carrera');
-    }
+  // chocar ya no pregunta: te tropiezas y el profe se acerca
+  stumble(o) {
+    o.hit = true; this.obs = this.obs.filter(x => x !== o);
+    this.gap -= 3.5; this.slow = 1.2; this.boost = 0; this.shake = 0.35; this.inv = 0.9;
+    this.dust(18, '#e9c46a'); this.banner = { text: o.type === 'block' ? '💥 ¡Chocaste! El profe se acerca' : '💥 ¡Tropezaste!', t: 1.3 };
+    this.say(['¡Te tengo!', '¡No corras en el pasillo!', '¡Vuelve a clases!', '¡Ya casi!'][Math.random() * 4 | 0]);
   }
-  async crash(o) {
-    o.hit = true; this.paused = true; clearInput();
-    const r = await askQuestion({ title: o.type === 'block' ? '💥 ¡Chocaste!' : '💥 ¡Tropezaste con la valla!', sub: 'Responde bien para seguir corriendo sin perder vida', time: 25 });
+  async openLock() {
+    const lk = this.lock; lk.asked = true; this.paused = true; clearInput();
+    const r = await askQuestion({ title: '🔒 Portón cerrado', sub: 'Responde bien para abrirlo y ganar turbo', time: 25 });
     if (r === null || game !== this) return;
-    this.obs = this.obs.filter(x => x !== o);
-    if (r) { this.ok++; this.score += 50; } else { this.bad++; this.lives--; }
-    this.inv = 1.5; clearInput(); this.pk = {};
-    if (this.lives <= 0) return endGame(this, '🏃 Fin de la carrera');
-    this.paused = false;
+    lk.open = true; lk.openT = 0;
+    if (r) { this.ok++; this.score += 150; this.boost = 2.2; this.gap = Math.min(15, this.gap + 4); this.banner = { text: '✅ ¡Correcto! ⚡ Turbo', t: 1.6, ok: true }; }
+    else { this.bad++; this.gap -= 5; this.slow = 1.5; this.shake = 0.3; this.banner = { text: '❌ ¡Uy! El profe te alcanza', t: 1.6 }; this.say('¡Eso no lo pasamos así!'); }
+    clearInput(); this.pk = {}; this.paused = false;
+  }
+  async caught() {
+    this.paused = true; clearInput();
+    const r = await askQuestion({ title: '👨‍🏫 ¡El profe te pilló!', sub: 'Responde bien para escaparte', time: 25 });
+    if (r === null || game !== this) return;
+    if (r) { this.ok++; this.score += 50; this.gap = 9; this.boost = 1.5; this.banner = { text: '🏃 ¡Te escapaste!', t: 1.5, ok: true }; }
+    else {
+      this.bad++; this.lives--; this.gap = 10;
+      if (this.lives <= 0) return endGame(this, '👨‍🏫 El profe te atrapó');
+      this.banner = { text: `Te quedan ${this.lives} vidas`, t: 1.6 };
+    }
+    this.inv = 1.5; clearInput(); this.pk = {}; this.paused = false;
   }
   update(dt) {
-    this.time += dt; this.inv -= dt;
+    this.time += dt; this.inv -= dt; this.shake = Math.max(0, this.shake - dt);
+    this.boost = Math.max(0, this.boost - dt); this.slow = Math.max(0, this.slow - dt);
     if (this.press('l', keys.arrowleft || keys.a)) this.move(-1);
     if (this.press('r', keys.arrowright || keys.d)) this.move(1);
     if (this.press('j', keys.arrowup || keys.w || keys[' '])) this.jump();
     this.speed = Math.min(30, 15 + this.dist / 300);
-    const dz = this.speed * (this.gate ? 0.7 : 1) * dt; this.dist += dz; // más lento mientras hay una pregunta por leer this.score += dz * 0.5;
+    const mul = (this.boost > 0 ? 1.45 : 1) * (this.slow > 0 ? 0.55 : 1);
+    const dz = this.speed * mul * dt; this.dist += dz; this.score += dz * 0.5;
+    // el profe: recupera distancia corriendo normal, con turbo te alejas
+    this.gap = Math.min(15, this.gap + (this.boost > 0 ? 2.5 : this.slow > 0 ? -1.5 : 0.25) * dt);
+    this.tLane += (this.px - this.tLane) * Math.min(1, dt * 3);
     this.px += (this.lane - this.px) * Math.min(1, dt * 14);
-    if (this.h > 0 || this.vy > 0) { this.vy -= 30 * dt; this.h += this.vy * dt; if (this.h <= 0) { this.h = 0; this.vy = 0; } }
+    if (this.h > 0 || this.vy > 0) { this.vy -= 30 * dt; this.h += this.vy * dt; if (this.h <= 0) { this.h = 0; this.vy = 0; this.dust(8); } }
+    else if (Math.random() < dt * 14) this.dust(1);
+    for (const p of this.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy -= 5 * dt; p.z += p.vz * dt - dz; p.t -= dt; }
+    this.parts = this.parts.filter(p => p.t > 0);
     for (const o of this.obs) o.z -= dz;
-    if (this.gate) { this.gate.z -= dz; if (this.gate.z <= 0) this.passGate(); }
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
-    this.nextRow -= dz; this.nextGate -= dz;
-    if (this.nextGate <= 0 && !this.gate) { this.spawnGate(200); this.nextGate = 290; }
+    if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
+    if ((this.bubbleT -= dt) <= 0) { this.bubbleT = rand(6, 11); if (this.gap < 10) this.say(['¡Alto ahí!', '¿Y la tarea?', '¡Prueba sorpresa!', '¡Vuelve acá!'][Math.random() * 4 | 0]); }
+    // portón con pregunta
+    if (this.lock) {
+      this.lock.z -= dz;
+      if (this.lock.open) this.lock.openT += dt;
+      if (!this.lock.asked && this.lock.z <= 0.7) { this.lock.z = 0.7; return this.openLock(); }
+      if (this.lock.z < -6) this.lock = null;
+    }
+    this.nextRow -= dz; this.nextLock -= dz;
+    if (this.nextLock <= 0 && !this.lock) { this.lock = { z: 120, asked: false, open: false, openT: 0 }; this.nextLock = rand(170, 230); }
     if (this.nextRow <= 0) {
-      if (!this.gate || Math.abs(this.gate.z - 95) > 28) this.spawnRow(95);
+      if (!this.lock || Math.abs(this.lock.z - 95) > 25) this.spawnRow(95);
       this.nextRow = rand(16, 26) + this.speed * 0.3;
     }
     const lane = Math.round(this.px);
     for (const o of this.obs) {
       if (o.lane !== lane || o.hit) continue;
-      if (o.type === 'coin') { if (o.z < 0.8 && o.z > -0.6 && this.h < 1.6) { o.hit = true; this.coins++; this.score += 5; } continue; }
+      if (o.type === 'coin') { if (o.z < 0.8 && o.z > -0.6 && this.h < 1.6) { o.hit = true; this.coins++; this.score += 5; this.gap = Math.min(15, this.gap + 0.15); } continue; }
       if (this.inv > 0) continue;
-      if (o.type === 'barrier' && o.z < 0.5 && o.z > -0.4 && this.h < 0.8) return this.crash(o);
-      if (o.type === 'block' && o.z < 0.5 && o.z + o.len > -0.2) return this.crash(o);
+      if (o.type === 'barrier' && o.z < 0.5 && o.z > -0.4 && this.h < 0.8) { this.stumble(o); break; }
+      if (o.type === 'block' && o.z < 0.5 && o.z + o.len > -0.2) { this.stumble(o); break; }
     }
     this.obs = this.obs.filter(o => o.z + o.len > -6 && !(o.type === 'coin' && o.hit));
+    if (this.gap <= 0 && this.inv <= 0) { this.gap = 0; return this.caught(); }
   }
   draw() {
     const c = ctx, hy = Math.round(H * 0.36), yb = H - 46, roadW = Math.min(W * 0.96, 720), lw = roadW / 3, D = 7, ppm = lw / 2.4;
@@ -1479,6 +1512,8 @@ GAMES.runner = class {
     const quad = (l1, l2, z1, z2, col) => { c.fillStyle = col; c.beginPath(); c.moveTo(X(l1, z1), Y(z1)); c.lineTo(X(l2, z1), Y(z1)); c.lineTo(X(l2, z2), Y(z2)); c.lineTo(X(l1, z2), Y(z2)); c.fill(); };
     const poly = (pts, col) => { c.fillStyle = col; c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.fill(); };
     const hash = (k, sd) => { const v = Math.sin(k * 127.1 + sd * 311.7) * 43758.5453; return v - Math.floor(v); };
+    c.save();
+    if (this.shake > 0) c.translate(rand(-1, 1) * this.shake * 22, rand(-1, 1) * this.shake * 16);
     // cielo, sol, nubes y ciudad a lo lejos
     let g = c.createLinearGradient(0, 0, 0, hy);
     g.addColorStop(0, '#2f6fd0'); g.addColorStop(0.55, '#86bff0'); g.addColorStop(1, '#ffd9a8');
@@ -1534,14 +1569,26 @@ GAMES.runner = class {
     }
     // objetos de lejos a cerca
     const items = this.obs.filter(o => !(o.type === 'coin' && o.hit)).map(o => ({ z: o.z, o }));
-    if (this.gate) items.push({ z: this.gate.z, gate: this.gate });
+    if (this.lock) items.push({ z: this.lock.z, lock: this.lock });
     items.push({ z: 0.01, player: true });
+    const tz = -Math.max(0, this.gap) * 0.12 - 0.12;
+    if (this.gap < 14) items.push({ z: tz, teacher: true });
+    for (const p of this.parts) items.push({ z: p.z, part: p });
     items.sort((a, b) => b.z - a.z);
     for (const it of items) {
       if (it.z > 300) continue;
       c.globalAlpha = Math.max(0.15, 1 - Math.max(0, it.z - 80) / 220);
       if (it.player) { c.globalAlpha = 1; this.drawPlayer(c, X(this.px, 0), Y(0), ppm, s(0)); continue; }
-      if (it.gate) { this.drawGate(c, it.gate, X, Y, s, lw, ppm); continue; }
+      if (it.lock) { this.drawLock(c, it.lock, X, Y, s, lw, ppm); continue; }
+      if (it.part) {
+        const p = it.part, sc = s(p.z); c.globalAlpha = Math.min(1, p.t * 2) * 0.8; c.fillStyle = p.col;
+        c.beginPath(); c.arc(X(p.x, p.z), Y(p.z) - p.y * ppm * sc, Math.max(1.5, 0.07 * ppm * sc), 0, 7); c.fill(); continue;
+      }
+      if (it.teacher) {
+        c.globalAlpha = 1; const side = this.tLane > 0.3 ? -0.6 : 0.6;
+        this.drawTeacher(c, X(this.tLane + side, it.z), Y(it.z), ppm, s(it.z), X, Y, s);
+        continue;
+      }
       const o = it.o;
       if (o.type === 'coin') {
         const z = Math.max(o.z, -0.6), sc = s(z), x = X(o.lane, z), y = Y(z) - 0.95 * ppm * sc - Math.sin(this.time * 4 + o.z) * 0.1 * ppm * sc;
@@ -1563,11 +1610,27 @@ GAMES.runner = class {
       } else this.drawTrain(c, o, X, Y, s, lw, ppm);
     }
     c.globalAlpha = 1;
+    // líneas de velocidad (más con turbo)
+    const fast = this.boost > 0 ? 1 : Math.max(0, (this.speed - 20) / 10) * 0.5;
+    if (fast > 0) {
+      c.strokeStyle = `rgba(255,255,255,${0.35 * fast})`; c.lineWidth = 2;
+      for (let i = 0; i < 14; i++) {
+        const a = hash(i, Math.floor(this.time * 12)) * Math.PI * 2, r1 = Math.max(W, H) * (0.35 + hash(i, 3) * 0.2), r2 = r1 + 60 + 80 * fast;
+        const cx = W / 2, cy = hy; c.beginPath(); c.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1 * 0.7); c.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2 * 0.7); c.stroke();
+      }
+    }
+    // borde rojo cuando el profe está muy cerca
+    if (this.gap < 4) {
+      const v = c.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+      v.addColorStop(0, 'rgba(255,0,0,0)'); v.addColorStop(1, `rgba(220,30,30,${0.35 * (1 - this.gap / 4) * (0.7 + 0.3 * Math.sin(this.time * 10))})`);
+      c.fillStyle = v; c.fillRect(0, 0, W, H);
+    }
+    c.restore();
     if (this.banner) {
       c.globalAlpha = Math.min(1, this.banner.t * 2); c.font = 'bold 22px system-ui'; c.textAlign = 'center';
       const tw = Math.min(W - 20, c.measureText(this.banner.text).width + 40);
-      c.fillStyle = '#000b'; c.beginPath(); c.roundRect(W / 2 - tw / 2, H * 0.55 - 32, tw, 46, 23); c.fill();
-      c.fillStyle = this.banner.ok ? '#7bd389' : '#ff8a8a'; c.fillText(this.banner.text, W / 2, H * 0.55); c.globalAlpha = 1;
+      c.fillStyle = '#000b'; c.beginPath(); c.roundRect(W / 2 - tw / 2, H * 0.2 - 32, tw, 46, 23); c.fill();
+      c.fillStyle = this.banner.ok ? '#7bd389' : '#ff8a8a'; c.fillText(this.banner.text, W / 2, H * 0.2); c.globalAlpha = 1;
     }
   }
   drawTrain(c, o, X, Y, s, lw, ppm) {
@@ -1593,19 +1656,70 @@ GAMES.runner = class {
     c.fillStyle = '#fff8c4'; for (const sd of [0.2, 0.8]) { c.beginPath(); c.arc(L1 + fw * sd, T1 + fh * 0.8, Math.max(1.5, fw * 0.07), 0, 7); c.fill(); }
     c.fillStyle = '#263238'; c.fillRect(L1 + fw * 0.05, T1 + fh * 0.92, fw * 0.9, fh * 0.08);
   }
-  drawGate(c, gt, X, Y, s, lw, ppm) {
-    const z = Math.max(gt.z, 0.2), sc = s(z), cols = { '-1': '#4cc9f0', '0': '#f72585', '1': '#7bd389' };
-    for (const o of gt.opts) {
-      const x = X(o.lane, z), y = Y(z), w = lw * 0.9 * sc, hh = 3.1 * ppm * sc, col = cols[o.lane], pw = Math.max(2, 0.12 * ppm * sc);
-      c.fillStyle = col; c.fillRect(x - w / 2, y - hh, pw, hh); c.fillRect(x + w / 2 - pw, y - hh, pw, hh);
-      c.fillStyle = '#10182bee'; c.beginPath(); c.roundRect(x - w / 2, y - hh, w, hh * 0.42, Math.max(2, 8 * sc)); c.fill();
-      c.strokeStyle = col; c.lineWidth = Math.max(1.5, 3 * sc); c.stroke();
-      if (sc > 0.1) {
-        const fs = Math.max(9, Math.floor(17 * sc * 1.25));
-        const lines = wrap(short(o.text, 60), w - 12, `700 ${fs}px system-ui`).slice(0, 3);
-        c.fillStyle = '#fff'; c.textAlign = 'center';
-        lines.forEach((l, k) => c.fillText(l, x, y - hh + hh * 0.21 + (k - (lines.length - 1) / 2) * fs * 1.12 + fs * 0.35));
-      }
+  // portón de fierro que cruza toda la vía; se abre (rejas suben) al responder
+  drawLock(c, lk, X, Y, s, lw, ppm) {
+    const z = Math.max(lk.z, 0.2), sc = s(z), y = Y(z), xl = X(-1.62, z), xr = X(1.62, z), hh = 3.4 * ppm * sc, pw = 0.28 * ppm * sc;
+    const lift = lk.open ? Math.min(1, lk.openT * 1.6) : 0;
+    // rejas
+    c.save(); c.beginPath(); c.rect(xl, y - hh, xr - xl, hh); c.clip();
+    const n = 14, barW = Math.max(1.5, 0.07 * ppm * sc), dy = -lift * hh * 0.85;
+    c.fillStyle = '#3d4552';
+    for (let i = 1; i < n; i++) c.fillRect(xl + (xr - xl) * i / n - barW / 2, y - hh * 0.78 + dy, barW, hh * 0.78);
+    c.fillRect(xl, y - hh * 0.45 + dy, xr - xl, barW * 1.2); c.fillRect(xl, y - hh * 0.12 + dy, xr - xl, barW * 1.2);
+    c.restore();
+    // pilares y letrero
+    c.fillStyle = '#7a4a2b'; c.fillRect(xl - pw, y - hh, pw, hh); c.fillRect(xr, y - hh, pw, hh);
+    c.fillStyle = '#5c3820'; c.fillRect(xl - pw, y - hh, pw * 0.3, hh); c.fillRect(xr + pw * 0.7, y - hh, pw * 0.3, hh);
+    const bh = hh * 0.22;
+    c.fillStyle = lk.open ? '#1d5c37' : '#10182b'; c.beginPath(); c.roundRect(xl - pw, y - hh - bh * 0.4, xr - xl + pw * 2, bh, Math.max(2, 8 * sc)); c.fill();
+    c.strokeStyle = lk.open ? '#7bd389' : '#ffd23f'; c.lineWidth = Math.max(1.5, 3 * sc); c.stroke();
+    if (sc > 0.08) {
+      const fs = Math.max(10, Math.floor(26 * sc));
+      c.fillStyle = lk.open ? '#7bd389' : '#ffd23f'; c.font = `800 ${fs}px system-ui`; c.textAlign = 'center';
+      c.fillText(lk.open ? '🔓 ¡ABIERTO!' : '🔒 RESPONDE PARA PASAR', W / 2, y - hh - bh * 0.4 + bh / 2 + fs * 0.35);
+    }
+    if (!lk.open) { // candado grande al centro
+      const r = 0.38 * ppm * sc, cx = W / 2, cy = y - hh * 0.42;
+      c.strokeStyle = '#c9ced6'; c.lineWidth = Math.max(2, r * 0.28); c.beginPath(); c.arc(cx, cy - r * 0.4, r * 0.55, Math.PI, 0); c.stroke();
+      c.fillStyle = '#ffd23f'; c.beginPath(); c.roundRect(cx - r * 0.8, cy - r * 0.4, r * 1.6, r * 1.3, r * 0.2); c.fill();
+      c.fillStyle = '#5c3820'; c.font = `900 ${Math.max(8, r)}px system-ui`; c.fillText('?', cx, cy + r * 0.62);
+    }
+  }
+  // el profe que te persigue (lo vemos de espalda, corriendo detrás tuyo)
+  drawTeacher(c, x, y, ppm, sc) {
+    const u = ppm * sc * 1.1, t = this.time * 11, sw = Math.sin(t);
+    c.fillStyle = '#0005'; c.beginPath(); c.ellipse(x, y, 0.45 * u, 0.12 * u, 0, 0, 7); c.fill();
+    c.lineCap = 'round';
+    for (const sd of [-1, 1]) { // piernas
+      const ph = sd * sw, fy = y - Math.max(0, ph) * 0.3 * u;
+      c.strokeStyle = '#2b2d42'; c.lineWidth = 0.22 * u; c.beginPath(); c.moveTo(x + sd * 0.13 * u, y - 0.85 * u); c.lineTo(x + sd * 0.16 * u, fy - 0.08 * u); c.stroke();
+      c.fillStyle = '#3b2a1e'; c.beginPath(); c.ellipse(x + sd * 0.16 * u, fy - 0.04 * u, 0.15 * u, 0.08 * u, 0, 0, 7); c.fill();
+    }
+    // brazo con regla levantada y brazo con maletín
+    const wave = Math.sin(this.time * 9) * 0.25;
+    c.strokeStyle = '#4a4e69'; c.lineWidth = 0.17 * u;
+    c.beginPath(); c.moveTo(x + 0.32 * u, y - 1.6 * u); c.lineTo(x + 0.55 * u, y - 2.05 * u); c.stroke();
+    c.save(); c.translate(x + 0.57 * u, y - 2.1 * u); c.rotate(-0.4 + wave);
+    c.fillStyle = '#d4a373'; c.fillRect(-0.04 * u, -0.75 * u, 0.1 * u, 0.8 * u);
+    c.fillStyle = '#8d6e4c'; for (let k = 1; k < 6; k++) c.fillRect(-0.04 * u, -0.75 * u + k * 0.13 * u, 0.05 * u, 0.015 * u);
+    c.restore();
+    c.beginPath(); c.moveTo(x - 0.32 * u, y - 1.6 * u); c.lineTo(x - 0.42 * u, y - (1.0 + sw * 0.1) * u); c.stroke();
+    c.fillStyle = '#6b4226'; c.beginPath(); c.roundRect(x - 0.62 * u, y - (1.0 + sw * 0.1) * u, 0.38 * u, 0.28 * u, 0.04 * u); c.fill();
+    // saco
+    c.fillStyle = '#4a4e69'; c.beginPath(); c.roundRect(x - 0.36 * u, y - 1.72 * u, 0.72 * u, 0.95 * u, 0.16 * u); c.fill();
+    c.fillStyle = '#3c3f58'; c.fillRect(x - 0.02 * u, y - 1.0 * u, 0.04 * u, 0.23 * u);
+    // cabeza: pelada arriba, pelo canoso a los lados, patas de los lentes
+    c.fillStyle = '#f1c9a5'; c.beginPath(); c.arc(x, y - 1.95 * u, 0.25 * u, 0, 7); c.fill();
+    c.fillStyle = '#d9d9d9'; c.beginPath(); c.arc(x, y - 1.9 * u, 0.26 * u, Math.PI * 0.05, Math.PI * 0.95); c.fill();
+    c.strokeStyle = '#222'; c.lineWidth = Math.max(1, 0.03 * u);
+    for (const sd of [-1, 1]) { c.beginPath(); c.moveTo(x + sd * 0.24 * u, y - 1.98 * u); c.lineTo(x + sd * 0.1 * u, y - 2.0 * u); c.stroke(); }
+    if (this.bubble) { // bocadillo
+      c.font = `700 ${Math.max(12, Math.min(20, 0.28 * u))}px system-ui`; c.textAlign = 'center';
+      const tw = c.measureText(this.bubble.text).width + 20, bx = Math.min(W - tw / 2 - 6, Math.max(tw / 2 + 6, x)), by = Math.max(70, y - 2.6 * u);
+      c.globalAlpha = Math.min(1, this.bubble.t * 3);
+      c.fillStyle = '#fff'; c.beginPath(); c.roundRect(bx - tw / 2, by - 30, tw, 36, 12); c.fill();
+      c.beginPath(); c.moveTo(bx - 8, by + 6); c.lineTo(bx + 8, by + 6); c.lineTo(x, by + 18); c.fill();
+      c.fillStyle = '#c1121f'; c.fillText(this.bubble.text, bx, by - 6); c.globalAlpha = 1;
     }
   }
   drawPlayer(c, x, y, ppm, sc) {
