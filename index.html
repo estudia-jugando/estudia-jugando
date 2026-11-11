@@ -1939,9 +1939,10 @@ GAMES.penal = class {
       if (click && !(this.msg && this.msg.t > 1)) { this.phase = 'power'; this.powerT = 0; } // fija la mira y pasa a la potencia
     } else if (this.phase === 'power') {
       this.powerT += dt;
-      const sp = 1.1 + this.mine.length * 0.06, ph = (this.powerT * sp) % 2;
+      // cada penal que pateas la barra va más rápido (también si se repite)
+      const sp = Math.min(3.6, 0.9 + (this.kicks || 0) * 0.3), ph = (this.powerT * sp) % 2;
       this.power = ph < 1 ? ph : 2 - ph; // sube y baja
-      if (click) this.shootMe(this.power);
+      if (click) { this.kicks = (this.kicks || 0) + 1; this.shootMe(this.power); }
     } else if (this.phase === 'save') {
       this.saveT -= dt;
       const km = { q: [0, 0], w: [1, 0], e: [2, 0], a: [0, 1], s: [1, 1], d: [2, 1] };
@@ -2127,6 +2128,8 @@ GAMES.penal = class {
         c.fillStyle = '#fff'; c.beginPath(); c.moveTo(bx0 - 8, my - 6); c.lineTo(bx0 - 1, my); c.lineTo(bx0 - 8, my + 6); c.fill();
         c.fillRect(bx0 - 2, my - 2, bw + 4, 4);
         c.font = '700 11px system-ui'; c.fillText('POTENCIA', bx0 + bw / 2, by0 - 10);
+        const spd = Math.min(3.6, 0.9 + (this.kicks || 0) * 0.3);
+        c.fillStyle = spd > 2.5 ? '#ff6b6b' : spd > 1.6 ? '#ffb547' : '#7bd389'; c.fillText('⚡'.repeat(Math.min(5, 1 + Math.floor((spd - 0.9) / 0.6))), bx0 + bw / 2, by0 + bh + 14);
       }
     }
     // marcador
