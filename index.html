@@ -239,7 +239,10 @@ Reglas:
 
 <div class="modal" id="qModal">
   <div class="qcard">
-    <div class="qtitle" id="qTitle"></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+      <div class="qtitle" id="qTitle"></div>
+      <button id="qExit" style="display:none;padding:6px 12px;font-size:13px;flex:none">✕ Salir</button>
+    </div>
     <div class="qsub" id="qSub"></div>
     <div class="qtimer" id="qTimer"><div id="qTimerBar"></div></div>
     <div class="qtext" id="qText"></div>
@@ -824,6 +827,9 @@ function askQuestion({ title, sub = '', time = 0 }) {
     $('#qOpts').innerHTML = q.options.map((o, k) => `<button class="opt" data-k="${k}"><kbd>${k + 1}</kbd><span>${esc(o)}</span></button>`).join('');
     $('#qFeed').classList.remove('on');
     $('#qTimer').style.display = time ? '' : 'none';
+    // en el repaso la pregunta tapa toda la pantalla: botón para salir
+    $('#qExit').style.display = gameKind === 'review' ? '' : 'none';
+    $('#qExit').textContent = STORY_RUN ? '✕ Volver al mapa' : '✕ Salir';
     $('#qModal').classList.add('on');
     qState = { q, i, resolve, answered: false, result: false, timer: null };
     if (time) {
@@ -861,6 +867,7 @@ function closeQuestion(force) {
 }
 $('#qOpts').addEventListener('click', e => { const b = e.target.closest('.opt'); if (b) answer(+b.dataset.k); });
 $('#qNext').onclick = () => closeQuestion();
+$('#qExit').onclick = () => { closeQuestion(true); stopGame(); };
 
 /* ============ input ============ */
 const keys = {};
@@ -3084,8 +3091,9 @@ GAMES.world = class {
     this.banner = opts.coinsMsg ? { text: `🪙 ¡Ganaste ${opts.coinsMsg} fichas! Ve a tu casa a gastarlas`, t: 3.5 }
       : { text: 'Camina a un lugar para jugar · cada lugar usa la materia que elijas', t: 4 };
     $('#help').textContent = 'Camina con WASD / flechas, o haz clic (o toca) donde quieras ir. Acércate a un lugar para entrar.';
+    this.renderPanel();
   }
-  stop() { $('#storyPanel').style.display = 'none'; }
+  stop() { const el = $('#storyPanel'); el.style.display = 'none'; el.style.top = ''; el.style.bottom = ''; }
   hud() { return `<span>🗺️ Modo Historia</span><span>🪙 ${STORY.coins} fichas</span><span>🏠 ${housePct()}% de tu casa</span>`; }
   pos(pl) { return { x: W * pl.x, y: H * pl.y }; }
   enter(pl) {
@@ -3096,8 +3104,20 @@ GAMES.world = class {
   }
   renderPanel() {
     const el = $('#storyPanel'), pl = this.near;
-    if (!pl) { el.style.display = 'none'; return; }
-    el.style.display = 'block';
+    el.style.display = 'block'; el.style.top = pl ? '' : '54px'; el.style.bottom = pl ? '' : 'auto';
+    if (!pl) { // lejos de los lugares: cambiar la materia de todos de una vez (la casa no cambia)
+      const games = PLACES.filter(p => !p.house), ids = new Set(games.map(p => placeSubject(p).id)), same = ids.size === 1 ? [...ids][0] : '';
+      el.innerHTML = `<div class="sp-row"><div><b>📁 Materia de las preguntas</b><br><small>Se aplica a todos los lugares · tu casa y tus fichas no cambian</small></div>
+        <select data-all>${same ? '' : '<option value="" selected>Varias materias</option>'}${SUBJECTS.map(s => `<option value="${s.id}"${s.id === same ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select></div>`;
+      el.onclick = null;
+      el.onchange = e => {
+        if (!e.target.matches('[data-all]') || !e.target.value) return;
+        for (const p of games) STORY.zones[p.id] = e.target.value;
+        saveStory(); this.banner = { text: `📁 Ahora todos los lugares usan ${SUBJECTS.find(s => s.id === e.target.value).name}`, t: 2.5 };
+        this.renderPanel();
+      };
+      return;
+    }
     if (pl.house) {
       const h = HOUSES.find(x => x.id === STORY.house);
       el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b><br><small>${h ? h.icon + ' ' + h.name + ' · ' + housePct() + '% terminada' : 'Todavía no eliges tu hogar'} · 🪙 ${STORY.coins} fichas</small></div><button class="primary" data-enter>Entrar ▶</button></div>`;
