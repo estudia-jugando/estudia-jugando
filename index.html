@@ -98,6 +98,11 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 .qfeed.on{display:block}
 .qfeed .verdict{font-weight:700;font-size:18px}
 .qfeed .exp{color:var(--muted);font-size:14px;margin:6px 0 12px;background:var(--panel2);border-radius:8px;padding:8px 10px}
+.rank{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:var(--panel2);margin-bottom:6px}
+.rank .pos{width:32px;text-align:center;font-weight:700}
+.rank .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank b{color:var(--warn)}
+.rank.me{outline:2px solid var(--accent)}
 .endstats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
 .endstats div{background:var(--panel2);border-radius:10px;padding:10px;text-align:center}
 .endstats b{display:block;font-size:24px}
@@ -196,6 +201,7 @@ Reglas:
         <span><b>Repaso rápido</b><small>10 preguntas seguidas, sin presión. Ideal para repasar antes de la prueba.</small><span class="best" data-best="review"></span></span>
       </button>
     </div>
+    <button id="rankBtn" class="game" style="margin-top:14px;justify-content:center"><span class="ico" style="font-size:28px">🏆</span><span><b>Ranking de jugadores</b><small>Los que más puntos han ganado estudiando</small></span></button>
     <p class="tip" id="noQTip">Primero carga apuntes y genera preguntas para desbloquear los juegos.</p>
   </section>
 </main>
@@ -225,6 +231,17 @@ Reglas:
       <div class="exp" id="qExp"></div>
       <button class="primary" id="qNext">Continuar (Enter)</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="rankModal">
+  <div class="qcard">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div class="qtitle">🏆 Ranking</div>
+      <button id="rankClose">✕ Cerrar</button>
+    </div>
+    <div class="subjects" id="rankTabs" style="margin:14px 0"></div>
+    <div id="rankList"></div>
   </div>
 </div>
 
@@ -560,6 +577,7 @@ async function cloudLoad() {
     renderQuestions();
     setStatus(`☁️ Progreso cargado de tu cuenta: ${SUBJECTS.length} materia${SUBJECTS.length > 1 ? 's' : ''}.`, 'ok');
     await cloudSaveNow();
+    rankingUpdate(); // sube tu nombre y récords al ranking
   } catch (e) {
     console.warn(e);
     setSync(e.code === 'permission-denied' ? '⚠️ Revisa las reglas de Firestore' : '⚠️ No se pudo cargar tu progreso');
@@ -577,6 +595,43 @@ async function cloudSaveNow() {
     await batch.commit(); deletedIds.clear();
     setSync('☁️ Todo guardado en tu cuenta');
   } catch (e) { console.warn(e); setSync('⚠️ No se pudo guardar (' + (e.code || 'error') + ')'); }
+}
+/* ============ ranking ============ */
+const GAME_NAMES = { zombie: '🧟 Zombies', catch: '🧺 Atrapa', maze: '👾 Laberinto', runner: '🏃 Carrera', penal: '⚽ Penales', review: '📚 Repaso' };
+function rankName() { // nombre + inicial del apellido, para no mostrar el nombre completo
+  const p = (fbUser.displayName || (fbUser.email || 'Jugador').split('@')[0]).trim().split(/\s+/);
+  return p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}.` : p[0];
+}
+function rankingUpdate(game, score) {
+  if (!fbUser || !fdb || !cloudReady) return;
+  const inc = firebase.firestore.FieldValue.increment, data = { name: rankName(), best: store.get('ej_best', {}), updated: Date.now() };
+  if (game) { data.total = inc(Math.max(0, Math.floor(score))); data.games = inc(1); }
+  fdb.collection('ranking').doc(fbUser.uid).set(data, { merge: true }).catch(e => console.warn('ranking', e));
+}
+let rankTab = 'total';
+async function showRanking() {
+  $('#rankModal').classList.add('on');
+  const tabs = [['total', '⭐ Total'], ...Object.entries(GAME_NAMES)];
+  $('#rankTabs').innerHTML = tabs.map(([k, n]) => `<button class="subj${k === rankTab ? ' on' : ''}" data-rt="${k}">${n}</button>`).join('');
+  const list = $('#rankList');
+  if (!window.firebase || !fdb) { list.innerHTML = '<p class="status">El ranking necesita internet.</p>'; return; }
+  if (!fbUser) { list.innerHTML = '<p class="status">🔐 Entra con Google (arriba a la derecha) para ver el ranking y aparecer en él.</p>'; return; }
+  list.innerHTML = '<p class="status">⏳ Cargando…</p>';
+  try {
+    const field = rankTab === 'total' ? 'total' : 'best.' + rankTab;
+    const snap = await fdb.collection('ranking').orderBy(field, 'desc').limit(30).get();
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const val = r => rankTab === 'total' ? (r.total || 0) : ((r.best || {})[rankTab] || 0);
+    const medal = i => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+    list.innerHTML = rows.length ? rows.filter(r => val(r) > 0).map((r, i) =>
+      `<div class="rank${r.id === fbUser.uid ? ' me' : ''}"><span class="pos">${medal(i)}</span><span class="nm">${esc(r.name || 'Jugador')}${r.id === fbUser.uid ? ' (tú)' : ''}</span><b>${val(r).toLocaleString('es-CL')}</b></div>`).join('')
+      : '';
+    if (!list.innerHTML) list.innerHTML = '<p class="status">Todavía nadie tiene puntos aquí. ¡Juega y sé el primero!</p>';
+    if (!rows.some(r => r.id === fbUser.uid)) list.innerHTML += '<p class="status" style="margin-top:10px">Tú aún no apareces en este top: termina una partida estando conectado.</p>';
+  } catch (e) {
+    console.warn(e);
+    list.innerHTML = `<p class="status err">No se pudo cargar el ranking (${esc(e.code || 'error')}).</p>`;
+  }
 }
 function cloudSave() {
   if (!fbUser || !cloudReady) return;
@@ -626,7 +681,7 @@ $('#delSubj').onclick = () => {
 function renderQuestions() {
   renderSubjects();
   const n = QUESTIONS.length;
-  document.querySelectorAll('.game').forEach(b => b.disabled = !n);
+  document.querySelectorAll('.game[data-game]').forEach(b => b.disabled = !n);
   $('#noQTip').style.display = n ? 'none' : '';
   $('#qdetails').style.display = n ? '' : 'none';
   $('#qlist').innerHTML = QUESTIONS.map((q, i) =>
@@ -793,6 +848,7 @@ function endGame(g, title) {
   track('juego_terminado', { juego: gameKind, puntaje: g.score, correctas: g.ok, incorrectas: g.bad });
   const best = store.get('ej_best', {}); const prev = best[gameKind] || 0;
   if (g.score > prev) { best[gameKind] = g.score; store.set('ej_best', best); cloudSave(); }
+  rankingUpdate(gameKind, g.score);
   $('#endTitle').textContent = title;
   $('#endScore').textContent = g.score; $('#endOk').textContent = g.ok; $('#endBad').textContent = g.bad;
   $('#endBest').textContent = g.score > prev ? '🏆 ¡Nuevo récord!' : `Récord: ${prev}`;
@@ -801,7 +857,11 @@ function endGame(g, title) {
 $('#backBtn').onclick = stopGame;
 $('#menuBtn').onclick = stopGame;
 $('#againBtn').onclick = () => startGame(gameKind);
-document.querySelectorAll('.game').forEach(b => b.onclick = () => startGame(b.dataset.game));
+document.querySelectorAll('.game[data-game]').forEach(b => b.onclick = () => startGame(b.dataset.game));
+$('#rankBtn').onclick = showRanking;
+$('#rankClose').onclick = () => $('#rankModal').classList.remove('on');
+$('#rankModal').addEventListener('click', e => { if (e.target.id === 'rankModal') $('#rankModal').classList.remove('on'); });
+$('#rankTabs').addEventListener('click', e => { const b = e.target.closest('[data-rt]'); if (b) { rankTab = b.dataset.rt; showRanking(); } });
 function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000 || 0); lastT = t;
   if (game) {
