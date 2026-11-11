@@ -609,7 +609,10 @@ function rankName() { // nombre + inicial del apellido, para no mostrar el nombr
 }
 function rankingUpdate(game, score) {
   if (!fbUser || !fdb || !cloudReady) return;
-  const inc = firebase.firestore.FieldValue.increment, data = { name: rankName(), best: store.get('ej_best', {}), updated: Date.now() };
+  const inc = firebase.firestore.FieldValue.increment, best = store.get('ej_best', {});
+  // bestSum: suma de tus récords en todos los juegos (es lo que muestra la pestaña Total)
+  const bestSum = Object.keys(GAME_NAMES).reduce((a, k) => a + (Math.floor(best[k]) || 0), 0);
+  const data = { name: rankName(), best, bestSum, updated: Date.now() };
   if (game) { data.total = inc(Math.max(0, Math.floor(score))); data.games = inc(1); }
   else data.total = inc(0); // crea el campo para que aparezcas aunque aún no termines una partida
   fdb.collection('ranking').doc(fbUser.uid).set(data, { merge: true }).catch(e => console.warn('ranking', e));
@@ -624,19 +627,21 @@ async function showRanking() {
   if (!fbUser) { list.innerHTML = '<p class="status">🔐 Entra con Google (arriba a la derecha) para ver el ranking y aparecer en él.</p>'; return; }
   list.innerHTML = '<p class="status">⏳ Cargando…</p>';
   try {
-    const field = rankTab === 'total' ? 'total' : 'best.' + rankTab;
+    const field = rankTab === 'total' ? 'bestSum' : 'best.' + rankTab;
     const snap = await Promise.race([
       fdb.collection('ranking').orderBy(field, 'desc').limit(30).get(),
       new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout' }), 12000))
     ]);
     const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const val = r => rankTab === 'total' ? (r.total || 0) : ((r.best || {})[rankTab] || 0);
+    const val = r => rankTab === 'total' ? (r.bestSum || 0) : ((r.best || {})[rankTab] || 0);
     const medal = i => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+    const note = rankTab === 'total' ? '<p class="status" style="margin:0 0 10px">⭐ Total = suma de tu mejor puntaje en cada uno de los 6 juegos. ¡Juega todos para subir!</p>' : `<p class="status" style="margin:0 0 10px">Mejor puntaje en ${GAME_NAMES[rankTab]}</p>`;
     list.innerHTML = rows.length ? rows.filter(r => val(r) > 0).map((r, i) =>
       `<div class="rank${r.id === fbUser.uid ? ' me' : ''}"><span class="pos">${medal(i)}</span><span class="nm">${esc(r.name || 'Jugador')}${r.id === fbUser.uid ? ' (tú)' : ''}</span><b>${val(r).toLocaleString('es-CL')}</b></div>`).join('')
       : '';
     if (!list.innerHTML) list.innerHTML = '<p class="status">Todavía nadie tiene puntos aquí. ¡Juega y sé el primero!</p>';
     if (!rows.some(r => r.id === fbUser.uid)) list.innerHTML += '<p class="status" style="margin-top:10px">Tú aún no apareces en este top: termina una partida estando conectado.</p>';
+    list.innerHTML = note + list.innerHTML;
   } catch (e) {
     console.warn(e);
     const why = {
