@@ -71,6 +71,9 @@ code{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:12px}
 #hud{display:flex;gap:18px;flex-wrap:wrap;font-weight:600;font-size:15px}
 #stage{position:relative;flex:1;min-height:0;overflow:hidden}
 canvas{display:block;width:100%;height:100%;touch-action:none}
+#cv{position:relative;z-index:1}
+#catchQ,.help{z-index:2}
+#cv3{position:absolute;inset:0;display:none;z-index:0}
 #gameScreen.manualAim canvas{cursor:none}
 #catchQ{position:absolute;left:50%;top:12px;transform:translateX(-50%);width:min(760px,calc(100% - 32px));background:#000c;border:1px solid var(--line);padding:10px 16px;border-radius:12px;text-align:center;font-weight:600;display:none}
 #catchQ .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px;font-weight:500;font-size:14px}
@@ -230,6 +233,7 @@ Reglas:
     <div id="hud"></div>
   </div>
   <div id="stage">
+    <canvas id="cv3"></canvas>
     <canvas id="cv"></canvas>
     <div id="catchQ"></div>
     <div id="storyPanel"></div>
@@ -893,7 +897,13 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-window.addEventListener('mousemove', e => { if (!game) return; Object.assign(mouse, pos(e)); mouse.mt = performance.now(); });
+let lastTouchT = 0;
+window.addEventListener('touchstart', () => { lastTouchT = performance.now(); }, { passive: true });
+window.addEventListener('mousemove', e => {
+  if (!game) return;
+  if (performance.now() - lastTouchT < 800) return; // ignorar el "mouse falso" que generan los toques en celular
+  Object.assign(mouse, pos(e)); mouse.mt = performance.now();
+});
 cv.addEventListener('mousedown', e => { Object.assign(mouse, pos(e)); mouse.down = true; mouse.tap = true; });
 window.addEventListener('mouseup', () => mouse.down = false);
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -916,7 +926,7 @@ let game = null, gameKind = null, gameOpts = {}, lastT = 0, lastHud = '';
 const GAMES = {};
 let STORY_RUN = null; // mientras juegas un lugar del modo historia: { zone, subject }
 function startGame(kind, opts = {}) {
-  const meta = kind === 'world' || kind === 'house'; // mapa y casa no usan preguntas
+  const meta = kind === 'world' || kind === 'house' || kind === 'world3d'; // mapa y casa no usan preguntas
   if (!meta) {
     const subj = opts.subject && SUBJECTS.find(s => s.id === opts.subject);
     QUESTIONS = subj ? subj.questions : CUR.questions; deck = [];
@@ -961,7 +971,7 @@ function stopGame() {
   if (g && g.stop) g.stop();
   game = null; closeQuestion(true); $('#optBtn').hidden = true; $('#gameScreen').classList.remove('manualAim');
   QUESTIONS = CUR.questions; deck = [];
-  if (wasStory || (g && g.backTo)) { STORY_RUN = null; startGame('world', { coinsMsg: coins }); return; }
+  if (wasStory || (g && g.backTo)) { STORY_RUN = null; startGame(storyWorldKind(), { coinsMsg: coins }); return; }
   $('#gameScreen').classList.remove('on'); $('#endModal').classList.remove('on'); $('#catchQ').style.display = 'none';
   $('#storyPanel').style.display = 'none';
   renderQuestions();
@@ -986,7 +996,12 @@ $('#menuBtn').onclick = stopGame;
 $('#againBtn').onclick = () => startGame(gameKind, gameOpts);
 document.querySelectorAll('.game[data-game]').forEach(b => b.onclick = () => startGame(b.dataset.game));
 $('#rankBtn').onclick = showRanking;
-$('#storyBtn').onclick = () => startGame('world');
+$('#storyBtn').onclick = async () => {
+  const b = $('#storyBtn'); b.disabled = true; b.querySelector('b').textContent = 'Cargando mundo 3D…';
+  await ensureThree();
+  b.disabled = false; b.querySelector('b').textContent = 'Modo Historia';
+  startGame(storyWorldKind());
+};
 $('#rankClose').onclick = () => $('#rankModal').classList.remove('on');
 $('#rankModal').addEventListener('click', e => { if (e.target.id === 'rankModal') $('#rankModal').classList.remove('on'); });
 $('#rankTabs').addEventListener('click', e => { const b = e.target.closest('[data-rt]'); if (b) { rankTab = b.dataset.rt; showRanking(); } });
@@ -2469,7 +2484,9 @@ GAMES.garden = class {
   update(dt) {
     this.time += dt; this.reload = Math.max(0, this.reload - dt);
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
-    if (mouse.mt) { this.aim.x = mouse.x; this.aim.y = mouse.y; }
+    // la mira sigue al mouse solo cuando el mouse se mueve de verdad; en celular sigue al dedo
+    if (mouse.mt && mouse.mt !== this.lastMt && !touch.active) { this.lastMt = mouse.mt; this.aim.x = mouse.x; this.aim.y = mouse.y; }
+    if (touch.active) { this.aim.x = touch.x; this.aim.y = touch.y; this.lastMt = mouse.mt; }
     this.aim.x += ((keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0)) * 420 * dt;
     this.aim.y += ((keys.arrowdown || keys.s ? 1 : 0) - (keys.arrowup || keys.w ? 1 : 0)) * 420 * dt;
     if (mouse.tap) { this.fire(mouse.x, mouse.y); mouse.tap = false; }
@@ -3200,35 +3217,42 @@ GAMES.house = class {
   }
   stop() { $('#storyPanel').style.display = 'none'; }
   hud() { const h = HOUSES.find(x => x.id === STORY.house); return `<span>🪙 ${STORY.coins} fichas</span><span>${h ? h.icon + ' ' + h.name : '🏚️ Elige tu hogar'}</span><span>✨ ${housePct()}% terminada</span>`; }
-  renderPanel() {
-    const el = $('#storyPanel'); el.style.display = 'block';
+  renderPanel() { renderShopPanel($('#storyPanel'), this, () => this.renderPanel()); }
+};
+// tienda del hogar (se usa en la casa 2D y en el mundo 3D). ui guarda la pestaña y el aviso; onChange se llama después de cada compra
+function renderShopPanel(el, ui, rerender) {
+  {
+    el.style.display = 'block'; ui.tab = ui.tab || 'arreglos';
     if (!STORY.house) {
       el.innerHTML = `<b>🏚️ Elige tu hogar</b> <small>(lo vas a ir arreglando con tus fichas)</small><div class="sp-grid">${HOUSES.map(h => `<button class="sp-item" data-house="${h.id}"><span class="sp-ico">${h.icon}</span>${h.name}</button>`).join('')}</div>`;
     } else {
-      const items = SHOP.filter(i => i.cat === this.tab);
-      el.innerHTML = `<div class="sp-row" style="margin-bottom:8px"><div class="subjects"><button class="subj${this.tab === 'arreglos' ? ' on' : ''}" data-tab="arreglos">🛠️ Arreglos</button><button class="subj${this.tab === 'deco' ? ' on' : ''}" data-tab="deco">🌷 Decoración</button></div>
+      const items = SHOP.filter(i => i.cat === ui.tab);
+      el.innerHTML = `<div class="sp-row" style="margin-bottom:8px"><div class="subjects"><button class="subj${ui.tab === 'arreglos' ? ' on' : ''}" data-tab="arreglos">🛠️ Arreglos</button><button class="subj${ui.tab === 'deco' ? ' on' : ''}" data-tab="deco">🌷 Decoración</button></div>
         <div><b>🪙 ${STORY.coins}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button> <button data-reset style="padding:4px 10px;font-size:12px">🔄 Empezar de cero</button></div></div>
         <div class="sp-grid">${items.map(i => { const have = owns(i.id), can = STORY.coins >= i.cost;
           return `<button class="sp-item${have ? ' have' : ''}" data-buy="${i.id}" ${have || !can ? 'disabled' : ''}><span class="sp-ico">${i.icon}</span>${i.name}<small>${have ? '✔ Comprado' : '🪙 ' + i.cost}</small></button>`; }).join('')}</div>`;
     }
     el.onclick = e => {
       const b = e.target.closest('button'); if (!b) return;
-      if (b.dataset.house) { STORY.house = b.dataset.house; saveStory(); this.flash = { text: '🎉 ¡Este es tu nuevo hogar! Arréglalo con tus fichas', t: 3 }; }
-      else if (b.dataset.tab) this.tab = b.dataset.tab;
+      if (b.dataset.house) { STORY.house = b.dataset.house; saveStory(); ui.flash = { text: '🎉 ¡Este es tu nuevo hogar! Arréglalo con tus fichas', t: 3 }; }
+      else if (b.dataset.tab) ui.tab = b.dataset.tab;
       else if (b.hasAttribute('data-change')) { STORY.house = null; saveStory(); }
       else if (b.hasAttribute('data-reset')) {
         if (!confirm('¿Empezar tu hogar de cero? Se borran tus fichas y todo lo que compraste (también en tu cuenta). No se puede deshacer.')) return;
         Object.assign(STORY, { house: null, coins: 0, owned: [], lastDay: null, resetAt: Date.now() }); saveStory();
-        this.flash = { text: '🔄 Empezaste de cero. ¡A ganar fichas!', t: 2.5 };
+        ui.flash = { text: '🔄 Empezaste de cero. ¡A ganar fichas!', t: 2.5 };
       }
       else if (b.dataset.buy) {
         const it = SHOP.find(i => i.id === b.dataset.buy);
-        if (it && !owns(it.id) && STORY.coins >= it.cost) { STORY.coins -= it.cost; STORY.owned.push(it.id); saveStory(); this.flash = { text: `${it.icon} ¡Compraste ${it.name}!`, t: 2.2 }; track('compra_casa', { item: it.id }); }
+        if (it && !owns(it.id) && STORY.coins >= it.cost) { STORY.coins -= it.cost; STORY.owned.push(it.id); saveStory(); ui.flash = { text: `${it.icon} ¡Compraste ${it.name}!`, t: 2.2 }; track('compra_casa', { item: it.id }); }
       }
-      this.renderPanel();
+      if (ui.onChange) ui.onChange();
+      rerender();
     };
   }
-  update(dt) { this.time += dt; if (this.flash) { this.flash.t -= dt; if (this.flash.t <= 0) this.flash = null; } }
+}
+Object.assign(GAMES.house.prototype, { // resto de la casa 2D
+  update(dt) { this.time += dt; if (this.flash) { this.flash.t -= dt; if (this.flash.t <= 0) this.flash = null; } },
   draw() {
     const c = ctx, type = STORY.house || 'casa', panelH = $('#storyPanel').offsetHeight || 0;
     const sceneH = Math.max(200, H - panelH - 20), s = Math.min(W / 4.4, sceneH * 0.42), cx = W / 2, gy = sceneH * 0.82;
@@ -3255,6 +3279,365 @@ GAMES.house = class {
       const tw = Math.min(W - 20, c.measureText(this.flash.text).width + 30);
       c.fillStyle = '#000c'; c.beginPath(); c.roundRect(cx - tw / 2, 60, tw, 40, 20); c.fill(); c.fillStyle = '#ffd23f'; c.fillText(this.flash.text, cx, 86); c.globalAlpha = 1;
     }
+  }
+});
+
+/* ============ MODO HISTORIA EN 3D (primera persona, mundo de bloques) ============ */
+const THREE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+const W3 = { renderer: null, pos: null, yaw: Math.PI, failed: false };
+async function ensureThree() {
+  if (window.THREE) return true;
+  if (W3.failed) return false;
+  try { await loadScript(THREE_URL); return !!window.THREE; } catch (e) { W3.failed = true; return false; }
+}
+const storyWorldKind = () => (window.THREE && !W3.failed ? 'world3d' : 'world');
+// texturas pixeladas de 16x16 dibujadas con código
+function blockTex(base, opt = {}) {
+  const cv2 = document.createElement('canvas'); cv2.width = cv2.height = 16; const g = cv2.getContext('2d');
+  const rnd = seeded(opt.seed || base.length * 7 + base.charCodeAt(1));
+  g.fillStyle = base; g.fillRect(0, 0, 16, 16);
+  for (let i = 0; i < (opt.noise ?? 60); i++) { g.fillStyle = shade(base, (rnd() - 0.5) * (opt.amp || 0.25)); g.fillRect(rnd() * 16 | 0, rnd() * 16 | 0, 1 + (rnd() * 2 | 0), 1); }
+  if (opt.draw) opt.draw(g, rnd);
+  const t = new THREE.CanvasTexture(cv2); t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; return t;
+}
+function makeBlockMaterials() {
+  const L = (c, o = {}) => new THREE.MeshLambertMaterial({ map: blockTex(c, o), transparent: !!o.alpha, opacity: o.alpha || 1 });
+  const lines = (col, vertical) => (g) => { g.fillStyle = col; for (let i = 0; i < 16; i += 4) vertical ? g.fillRect(i, 0, 1, 16) : g.fillRect(0, i, 16, 1); };
+  const bricks = col => g => { g.fillStyle = col; for (let y = 0; y < 16; y += 4) { g.fillRect(0, y, 16, 1); for (let x = (y / 4) % 2 ? 0 : 4; x < 16; x += 8) g.fillRect(x, y, 1, 4); } };
+  const crack = g => { g.fillStyle = '#2a2420'; let x = 3, y = 1; for (let i = 0; i < 12; i++) { g.fillRect(x, y, 1, 1); x += i % 3 ? 1 : -1; y += 1; } };
+  return {
+    dirt: L('#8b5a2b'), stone: L('#8a8d91', { draw: bricks('#6f7276') }), stoneDirty: L('#6f7a68', { draw: bricks('#55604f'), amp: 0.4 }),
+    cobble: L('#7a7d82', { amp: 0.5, noise: 120 }), plank: L('#b8864e', { draw: lines('#8a5f33') }), plankDirty: L('#8a7358', { draw: lines('#6a5640') }),
+    log: L('#6b4a2b', { draw: lines('#4e3420', true) }), leaves: L('#3f8a3a', { amp: 0.5, noise: 120 }), sand: L('#e2c27a'),
+    sandstone: L('#d9b56a', { draw: lines('#b8954f') }), sandDirty: L('#a8946a', { draw: lines('#8a7a52'), amp: 0.4 }),
+    snow: L('#f2f7fb', { amp: 0.08 }), snowDirty: L('#c9d0d6', { amp: 0.2 }), ice: L('#bfe3ff', { alpha: 0.85, amp: 0.1 }),
+    glass: L('#cfefff', { alpha: 0.45, amp: 0.05, draw: g => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, 16, 1); g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16); g.fillRect(0, 15, 16, 1); } }),
+    board: L('#5c3a20', { draw: g => { g.fillStyle = '#3a2412'; g.fillRect(0, 5, 16, 2); g.fillRect(0, 11, 16, 2); } }),
+    wall: L('#f0d39a', { amp: 0.12 }), wallDirty: L('#a8957a', { amp: 0.35 }), crackWall: L('#c9b48e', { draw: crack, amp: 0.3 }),
+    crackStone: L('#7f8286', { draw: crack, amp: 0.3 }), brick: L('#a94434', { draw: bricks('#7a2f24') }),
+    roofRed: L('#b5372b', { draw: lines('#8a2a20') }), roofDirty: L('#6e4a42', { draw: lines('#55372f') }), roofBlue: L('#2b59c3', { draw: lines('#1f4291') }),
+    door: L('#7a4a2b', { draw: g => { g.fillStyle = '#5a3420'; g.fillRect(2, 2, 12, 12); g.fillStyle = '#ffd23f'; g.fillRect(11, 8, 2, 2); } }),
+    gold: L('#f5c542', { amp: 0.2 }), water: L('#3a8fd6', { alpha: 0.75, amp: 0.15 }), white: L('#f5f5f5', { amp: 0.06 }), black: L('#26272b', { amp: 0.1 }),
+    yellow: L('#f2c94c'), orange: L('#ff6a00'), red: L('#d52b1e'), blue: L('#0039a6'), court: L('#c77b3a', { draw: lines('#a8642d') }),
+    path: L('#a59a86', { amp: 0.4, noise: 120 }), farmland: L('#6b4423', { draw: lines('#55361b') }), crop: L('#7bc043'), carrot: L('#ff8c2a'),
+    fur: L('#e9e2d6', { amp: 0.1 }), furBrown: L('#9a6a3a', { amp: 0.15 }), furOrange: L('#e08a3a', { amp: 0.15 }), gray: L('#7d8088'), pink: L('#ff7eb6'), flowerY: L('#ffd23f'), flowerP: L('#b46cff'),
+    book: L('#8a5f33', { draw: g => { const cs = ['#d52b1e', '#2b59c3', '#2e8b57', '#f2c94c', '#6a3d9a']; for (let y = 1; y < 16; y += 8) for (let x = 1; x < 15; x += 2) { g.fillStyle = cs[(x + y) % 5]; g.fillRect(x, y, 2, 6); } } }),
+    lamp: new THREE.MeshBasicMaterial({ color: 0xfff2a8 }), warn: L('#f2c94c', { draw: g => { g.fillStyle = '#222'; for (let i = -16; i < 16; i += 6) { g.beginPath(); g.moveTo(i, 16); g.lineTo(i + 3, 16); g.lineTo(i + 19, 0); g.lineTo(i + 16, 0); g.fill(); } } })
+  };
+}
+// mundo de bloques: un mapa de "x,y,z" -> tipo
+class VoxelWorld {
+  constructor() { this.b = new Map(); this.deco = []; }
+  key(x, y, z) { return x + ',' + y + ',' + z; }
+  set(x, y, z, t) { if (t) this.b.set(this.key(x, y, z), t); else this.b.delete(this.key(x, y, z)); }
+  get(x, y, z) { return this.b.get(this.key(x, y, z)); }
+  box(x0, y0, z0, x1, y1, z1, t, hollow) {
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+      if (hollow && x > x0 && x < x1 && z > z0 && z < z1) continue; this.set(x, y, z, t);
+    }
+  }
+  tree(x, z, h = 4, y = 0) {
+    for (let i = 0; i < h; i++) this.set(x, y + i, z, 'log');
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = 0; dy <= 2; dy++) {
+      if (Math.abs(dx) + Math.abs(dz) + dy > 4 || (dx === 0 && dz === 0 && dy < 1)) continue;
+      if (!this.get(x + dx, y + h - 1 + dy, z + dz)) this.set(x + dx, y + h - 1 + dy, z + dz, 'leaves');
+    }
+  }
+  // detalle pequeño (no sólido): flores, cultivos, etc.
+  small(x, y, z, t, sx, sy, sz) { this.deco.push({ x, y, z, t, sx, sy, sz }); }
+  solid(x, y, z) { const t = this.get(x, y, z); return !!t && t !== 'water' && t !== 'leavesSoft'; }
+}
+const NONSOLID = new Set(['water']);
+// tu hogar en bloques (centrado en 0,0, puerta hacia +z). Lo que no has arreglado se ve dañado
+function buildVoxelHouse(V, type) {
+  const fresh = owns('pintura'), roofOk = owns('techo'), winOk = owns('ventanas'), wallsOk = owns('paredes'), doorOk = owns('puerta');
+  const hole = (x, y, z) => !roofOk && ((x * 7 + z * 13 + y * 5) % 9 + 9) % 9 < 3;
+  const wallT = (base, dirty, crackT) => (x, y, z) => !wallsOk && ((x * 3 + y * 7 + z * 11) % 13 + 13) % 13 === 0 ? crackT : (fresh ? base : dirty);
+  const win = (x, y, z) => V.set(x, y, z, winOk ? 'glass' : 'board');
+  let doorAt = null, top = 6;
+  if (type === 'castillo') {
+    const wt = wallT('stone', 'stoneDirty', 'crackStone');
+    for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) for (let y = 0; y < 5; y++) if (Math.abs(x) === 5 || Math.abs(z) === 5) V.set(x, y, z, wt(x, y, z));
+    for (let x = -5; x <= 5; x += 2) for (const z of [-5, 5]) V.set(x, 5, z, wt(x, 5, z));
+    for (let z = -5; z <= 5; z += 2) for (const x of [-5, 5]) V.set(x, 5, z, wt(x, 5, z));
+    for (const [cx, cz] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
+      V.box(cx - 1, 0, cz - 1, cx + 1, 7, cz + 1, null); for (let y = 0; y < 8; y++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) V.set(cx + dx, y, cz + dz, wt(cx + dx, y, cz + dz));
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (!hole(cx + dx, 8, cz + dz)) V.set(cx + dx, 8, cz + dz, fresh ? 'roofBlue' : 'roofDirty');
+      if (!hole(cx, 9, cz)) V.set(cx, 9, cz, fresh ? 'roofBlue' : 'roofDirty');
+      win(cx, 5, cz + (cz > 0 ? 1 : -1));
+    }
+    for (let y = 0; y < 3; y++) for (let x = -1; x <= 1; x++) V.set(x, y, 5, null); // portón
+    win(-3, 2, 5); win(3, 2, 5); win(-5, 2, 0); win(5, 2, 0);
+    doorAt = { x: 0, z: 5, w: 3 }; top = 10;
+  } else if (type === 'piramide') {
+    for (let i = 0; i <= 5; i++) for (let x = -5 + i; x <= 5 - i; x++) for (let z = -5 + i; z <= 5 - i; z++) {
+      const edge = Math.abs(x) === 5 - i || Math.abs(z) === 5 - i;
+      if (!edge && i < 4) continue;
+      if (i >= 3 && hole(x, i, z)) continue;
+      V.set(x, i, z, !wallsOk && ((x * 5 + z * 3 + i) % 11 + 11) % 11 === 0 ? 'crackStone' : (fresh ? 'sandstone' : 'sandDirty'));
+    }
+    for (let y = 0; y < 2; y++) V.set(0, y, 5, null);
+    win(-3, 1, 3); win(3, 1, 3); win(-3, 1, -3); win(3, 1, -3);
+    doorAt = { x: 0, z: 5, w: 1 }; top = 6;
+  } else if (type === 'iglu') {
+    for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) for (let y = 0; y <= 5; y++) {
+      const d = Math.hypot(x, y * 1.05, z); if (d > 5.4 || d < 4.4) continue;
+      if (y >= 3 && hole(x, y, z)) continue;
+      V.set(x, y, z, !wallsOk && ((x * 7 + y * 3 + z * 5) % 12 + 12) % 12 === 0 ? 'crackStone' : (fresh ? 'snow' : 'snowDirty'));
+    }
+    for (let y = 0; y < 2; y++) for (let z = 4; z <= 7; z++) { V.set(-1, y, z, fresh ? 'snow' : 'snowDirty'); V.set(1, y, z, fresh ? 'snow' : 'snowDirty'); V.set(0, y, z, null); }
+    for (let z = 4; z <= 7; z++) V.set(0, 2, z, fresh ? 'snow' : 'snowDirty');
+    V.set(0, 2, 7, fresh ? 'snow' : 'snowDirty');
+    win(-4, 2, 2); win(4, 2, 2);
+    doorAt = { x: 0, z: 7, w: 1 }; top = 6;
+  } else if (type === 'arbol') {
+    for (let y = 0; y < 7; y++) for (const [dx, dz] of [[0, 0], [1, 0], [0, 1], [1, 1]]) V.set(dx, y, dz - 2, 'log');
+    for (let y = 0; y < 7; y++) V.set(2, y, -1, 'plank'); // escalera
+    const pl = fresh ? 'plank' : 'plankDirty';
+    for (let x = -3; x <= 4; x++) for (let z = -5; z <= 2; z++) V.set(x, 7, z, pl);
+    for (let x = -3; x <= 4; x++) for (let z = -5; z <= 2; z++) for (let y = 8; y < 11; y++) if (x === -3 || x === 4 || z === -5 || z === 2) V.set(x, y, z, !wallsOk && ((x + y * 3 + z * 5) % 9 + 9) % 9 === 0 ? 'crackWall' : pl);
+    for (let y = 8; y < 10; y++) V.set(2, y, 2, null); V.set(2, 7, -1, null);
+    for (let x = -4; x <= 5; x++) for (let z = -6; z <= 3; z++) if (!hole(x, 11, z)) V.set(x, 11, z, fresh ? 'roofRed' : 'roofDirty');
+    win(-1, 9, 2); win(-3, 9, -1); win(4, 9, -1);
+    for (let dx = -3; dx <= 4; dx++) for (let dz = -6; dz <= 3; dz++) for (let dy = 12; dy <= 13; dy++) if ((dx * dx + dz * dz) < 20 + dy) V.set(dx, dy, dz, 'leaves');
+    doorAt = { x: 2, z: 2, w: 1, y: 8 }; top = 14;
+  } else { // casa
+    const wt = wallT('wall', 'wallDirty', 'crackWall');
+    V.box(-4, 0, -4, 4, 0, 4, 'plank');
+    for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) for (let y = 1; y < 5; y++) if (Math.abs(x) === 4 || Math.abs(z) === 4) V.set(x, y, z, wt(x, y, z));
+    for (let y = 1; y < 3; y++) V.set(0, y, 4, null);
+    win(-2, 2, 4); win(2, 2, 4); win(-4, 2, 0); win(4, 2, 0); win(0, 2, -4);
+    for (let i = 0; i <= 4; i++) for (let x = -5 + i; x <= 5 - i; x++) for (let z = -5; z <= 5; z++) {
+      if (x !== -5 + i && x !== 5 - i && i < 4) continue;
+      if (!hole(x, 5 + i, z)) V.set(x, 5 + i, z, fresh ? 'roofRed' : 'roofDirty');
+    }
+    for (let y = 5; y < 9; y++) V.set(3, y, -2, 'brick');
+    doorAt = { x: 0, z: 4, w: 1, y: 1 }; top = 10;
+  }
+  if (doorOk && doorAt) V.small(doorAt.x + (doorAt.w > 1 ? 1.3 : 0.45), (doorAt.y || 0), doorAt.z + 0.5, 'door', 0.12, 2, 0.9);
+  // decoración (fuera del hogar)
+  if (owns('flores')) for (let x = -4; x <= 4; x++) if (Math.abs(x) > 1) V.small(x + 0.5, 0, 6.5, ['pink', 'flowerY', 'flowerP', 'red'][(x + 8) % 4], 0.35, 0.45, 0.35);
+  if (owns('arbolito')) V.tree(-9, -2, 5);
+  if (owns('farol')) { for (let y = 0; y < 3; y++) V.small(5.5, y, 7.5, 'black', 0.2, 1, 0.2); V.small(5.5, 3, 7.5, 'lamp', 0.5, 0.5, 0.5); }
+  if (owns('cerca')) for (let i = -8; i <= 8; i++) for (const [x, z] of [[i, -9], [i, 9], [-9, i], [9, i]]) { if (z === 9 && Math.abs(x) < 2) continue; V.small(x + 0.5, 0, z + 0.5, 'plank', 0.25, 1.1, 0.25); V.small(x + 0.5, 0.7, z + 0.5, 'plank', z === 9 || z === -9 ? 1 : 0.15, 0.12, z === 9 || z === -9 ? 0.15 : 1); }
+  if (owns('bandera')) { for (let y = 0; y < 4; y++) V.small(0.5, top + y, 0.5, 'white', 0.12, 1, 0.12); V.small(1.3, top + 3, 0.5, 'white', 1.4, 0.45, 0.06); V.small(1.3, top + 2.55, 0.5, 'red', 1.4, 0.45, 0.06); V.small(0.85, top + 3, 0.47, 'blue', 0.55, 0.45, 0.07); }
+  if (owns('gato')) { V.small(2.5, 0, 6.5, 'furOrange', 0.5, 0.35, 0.3); V.small(2.85, 0.3, 6.5, 'furOrange', 0.3, 0.3, 0.3); }
+  if (owns('perro')) { V.small(-2.5, 0, 6.8, 'furBrown', 0.8, 0.5, 0.4); V.small(-2.0, 0.45, 6.8, 'furBrown', 0.4, 0.4, 0.4); }
+  if (owns('resbalin')) { for (let i = 0; i < 3; i++) V.set(8, i, 3 + i, 'plank'); for (let i = 0; i < 4; i++) V.small(7.5, 2.6 - i * 0.75, 6 + i, 'red', 1, 0.15, 1); }
+  if (owns('fuente')) { V.box(-8, 0, 5, -6, 0, 7, 'stone', true); V.set(-7, 0, 6, 'water'); V.small(-6.5, 1, 6.5, 'water', 0.4, 1.2, 0.4); }
+  if (owns('auto')) { V.small(7.5, 0.3, -6, 'red', 2.4, 0.8, 1.3); V.small(7.3, 1.1, -6, 'glass', 1.2, 0.6, 1.2); for (const [dx, dz] of [[-0.8, -0.65], [0.8, -0.65], [-0.8, 0.65], [0.8, 0.65]]) V.small(7.5 + dx, 0, -6 + dz, 'black', 0.5, 0.5, 0.15); }
+  if (owns('piscina')) for (let x = -10; x <= -5; x++) for (let z = -9; z <= -6; z++) {
+    const edge = x === -10 || x === -5 || z === -9 || z === -6;
+    V.small(x + 0.5, 0, z + 0.5, edge ? 'stone' : 'water', 1, edge ? 0.35 : 0.22, 1);
+  }
+  if (owns('estatua')) { V.set(9, 0, 9, 'gold'); V.small(9.5, 1, 9.5, 'gold', 0.5, 1, 0.5); V.small(9.5, 2, 9.5, 'gold', 1.2, 0.8, 1.2); }
+  return top;
+}
+// lugares del mundo 3D (mismos juegos que el mapa)
+const PLACES3D = { bosque: [-22, -16], huerto: [0, -26], estadio: [22, -16], rugby: [-22, 16], tunel: [22, 16], biblioteca: [0, 26] };
+function buildPlace(V, pl, cx, cz) {
+  const dirx = -Math.sign(cx), dirz = -Math.sign(cz), alongX = Math.abs(cx) >= Math.abs(cz); // el portal mira hacia el centro
+  const gx = alongX ? cx + dirx * 5 : cx, gz = alongX ? cz : cz + dirz * 5;
+  const frame = { bosque: 'log', huerto: 'plank', estadio: 'white', rugby: 'white', tunel: 'warn', biblioteca: 'brick' }[pl.id] || 'stone';
+  for (let y = 0; y < 5; y++) for (const o of [-2, 2]) V.set(alongX ? gx : gx + o, y, alongX ? gz + o : gz, frame);
+  for (let o = -2; o <= 2; o++) V.set(alongX ? gx : gx + o, 5, alongX ? gz + o : gz, frame);
+  const rnd = seeded(cx * 31 + cz * 17);
+  if (pl.id === 'bosque') { for (let i = 0; i < 16; i++) { const a = rnd() * 6.3, r = 2 + rnd() * 6; const x = Math.round(cx + Math.cos(a) * r), z = Math.round(cz + Math.sin(a) * r); if (Math.hypot(x - gx, z - gz) > 3) V.tree(x, z, 4 + (rnd() * 3 | 0)); } }
+  else if (pl.id === 'huerto') {
+    for (let x = cx - 4; x <= cx + 4; x++) for (let z = cz - 3; z <= cz + 3; z++) V.small(x + 0.5, 0, z + 0.5, 'farmland', 1, 0.12, 1);
+    for (let x = cx - 4; x <= cx + 4; x++) for (let z = cz - 3; z <= cz + 3; z += 2) V.small(x + 0.5, 0.12, z + 0.5, (x + z) % 3 ? 'crop' : 'carrot', 0.5, 0.5, 0.5);
+    for (let i = -5; i <= 5; i++) for (const [x, z] of [[cx + i, cz - 4], [cx - 5, cz + i * 0.8 | 0], [cx + 5, cz + i * 0.8 | 0]]) V.small(x + 0.5, 0, z + 0.5, 'plank', 0.2, 1, 0.2);
+    V.small(cx + 2.5, 0, cz - 1.5, 'fur', 0.6, 0.45, 0.4); V.small(cx + 2.9, 0.4, cz - 1.5, 'fur', 0.35, 0.35, 0.35); V.small(cx + 3, 0.75, cz - 1.6, 'fur', 0.1, 0.4, 0.08); V.small(cx + 3, 0.75, cz - 1.4, 'fur', 0.1, 0.4, 0.08);
+  } else if (pl.id === 'estadio') {
+    for (let x = cx - 5; x <= cx + 5; x++) for (let z = cz - 4; z <= cz + 4; z++) V.small(x + 0.5, -0.02, z + 0.5, 'court', 1, 0.06, 1);
+    for (let y = 0; y < 5; y++) V.set(cx, y, cz - 5, 'black');
+    V.box(cx - 1, 5, cz - 5, cx + 1, 6, cz - 5, 'white'); V.small(cx + 0.5, 5.2, cz - 4.1, 'orange', 1, 0.12, 0.8);
+    for (let i = 0; i < 3; i++) V.box(cx + 6 + i, 0, cz - 4, cx + 6 + i, i, cz + 4, 'plank'); // graderías detrás de la cancha
+  } else if (pl.id === 'rugby') {
+    for (let z = cz - 6; z <= cz + 6; z += 3) for (let x = cx - 5; x <= cx + 5; x++) V.small(x + 0.5, 0.01, z + 0.5, 'white', 1, 0.03, 0.15);
+    for (let y = 0; y < 8; y++) { V.set(cx - 2, y, cz, 'white'); V.set(cx + 2, y, cz, 'white'); }
+    for (let x = cx - 1; x <= cx + 1; x++) V.set(x, 2, cz, 'white');
+    V.small(cx + 0.5, 0, cz + 3.5, 'furBrown', 0.6, 0.35, 0.4);
+  } else if (pl.id === 'tunel') {
+    for (let x = cx - 5; x <= cx + 5; x++) for (let z = cz - 5; z <= cz + 5; z++) { const h = Math.max(0, 5 - Math.round(Math.hypot(x - cx, z - cz))); for (let y = 0; y < h; y++) V.set(x, y, z, 'cobble'); }
+    for (let y = 0; y < 3; y++) for (let o = -1; o <= 1; o++) V.set(alongX ? cx + dirx * 3 : cx + o, y, alongX ? cz + o : cz + dirz * 3, 'black');
+    for (let i = 0; i < 3; i++) V.small(cx + dirx * 7 + 0.5 + (alongX ? 0 : i - 1), 0, cz + dirz * 7 + 0.5 + (alongX ? i - 1 : 0), 'white', 0.3, 0.6, 0.3);
+  } else if (pl.id === 'biblioteca') {
+    for (let x = cx - 4; x <= cx + 4; x++) for (let z = cz - 3; z <= cz + 3; z++) for (let y = 0; y < 5; y++) if (Math.abs(x - cx) === 4 || Math.abs(z - cz) === 3) V.set(x, y, z, (y === 1 || y === 2) && Math.abs(z - cz) !== 3 ? 'book' : 'brick');
+    for (let x = cx - 5; x <= cx + 5; x++) for (let z = cz - 4; z <= cz + 4; z++) V.set(x, 5, z, 'plank');
+    for (let y = 0; y < 3; y++) V.set(cx, y, cz + dirz * 3, null);
+  }
+  return { gx, gz, alongX };
+}
+function textSprite(text, color = '#fff') {
+  const cv2 = document.createElement('canvas'), g = cv2.getContext('2d'); const fs = 44;
+  g.font = `700 ${fs}px system-ui, ${EMOJI_FONT}`; const w = Math.ceil(g.measureText(text).width) + 40; cv2.width = w; cv2.height = fs + 30;
+  g.font = `700 ${fs}px system-ui, ${EMOJI_FONT}`; g.fillStyle = 'rgba(0,0,0,.6)'; g.beginPath(); g.roundRect(0, 0, w, fs + 30, 22); g.fill();
+  g.fillStyle = color; g.textBaseline = 'middle'; g.fillText(text, 20, (fs + 30) / 2 + 2);
+  const t = new THREE.CanvasTexture(cv2); const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
+  sp.renderOrder = 10; sp.scale.set(w / (fs + 30) * 1.1, 1.1, 1); return sp;
+}
+
+GAMES.world3d = class {
+  constructor(opts = {}) {
+    this.meta = true; this.score = 0; this.ok = 0; this.bad = 0; this.time = 0; this.ui = { tab: 'arreglos' }; this.near = null;
+    this.cv3 = $('#cv3'); this.cv3.style.display = 'block';
+    try {
+      if (!W3.renderer) { W3.renderer = new THREE.WebGLRenderer({ canvas: this.cv3, antialias: true }); W3.mats = makeBlockMaterials(); }
+    } catch (e) { W3.failed = true; this.cv3.style.display = 'none'; setTimeout(() => startGame('world', opts), 0); this.dead = true; return; }
+    this.r = W3.renderer; this.r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x8fd0ff); this.scene.fog = new THREE.Fog(0x8fd0ff, 30, 75);
+    this.cam = new THREE.PerspectiveCamera(70, W / H, 0.05, 200);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x557744, 0.85));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(20, 40, 10); this.scene.add(sun);
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshLambertMaterial({ map: blockTex('#5fae3f', { amp: 0.3, noise: 90 }) }));
+    ground.material.map.wrapS = ground.material.map.wrapT = THREE.RepeatWrapping; ground.material.map.repeat.set(120, 120);
+    ground.rotation.x = -Math.PI / 2; this.scene.add(ground);
+    this.world = new THREE.Group(); this.scene.add(this.world);
+    this.p = W3.pos ? { ...W3.pos } : { x: 0.5, y: 0, z: 13, vy: 0 }; this.yaw = W3.pos ? W3.yaw : 0; this.pitch = -0.05;
+    this.rebuild();
+    // controles
+    this.onLock = () => { this.locked = document.pointerLockElement === cv; };
+    this.onMove = e => { if (this.locked) { this.yaw -= e.movementX * 0.0025; this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch - e.movementY * 0.0025)); } };
+    this.onDown = e => { if (!isTouchDevice && !this.locked && cv.requestPointerLock) cv.requestPointerLock(); };
+    document.addEventListener('pointerlockchange', this.onLock); document.addEventListener('mousemove', this.onMove); cv.addEventListener('mousedown', this.onDown);
+    this.touches = {}; this.joy = null;
+    this.onTS = e => { for (const t of e.changedTouches) { const q = pos(t); if (this.inJump(q)) { this.jumpReq = true; continue; } this.touches[t.identifier] = { kind: q.x < W * 0.45 ? 'joy' : 'look', x0: q.x, y0: q.y, x: q.x, y: q.y }; } };
+    this.onTM = e => { for (const t of e.changedTouches) { const s = this.touches[t.identifier]; if (!s) continue; const q = pos(t); if (s.kind === 'look') { this.yaw -= (q.x - s.x) * 0.006; this.pitch = Math.max(-1.3, Math.min(1.3, this.pitch - (q.y - s.y) * 0.006)); } s.x = q.x; s.y = q.y; } };
+    this.onTE = e => { for (const t of e.changedTouches) delete this.touches[t.identifier]; };
+    cv.addEventListener('touchstart', this.onTS); cv.addEventListener('touchmove', this.onTM); cv.addEventListener('touchend', this.onTE); cv.addEventListener('touchcancel', this.onTE);
+    this.banner = opts.coinsMsg ? { text: `🪙 ¡Ganaste ${opts.coinsMsg} fichas! Ve a tu hogar a gastarlas`, t: 3.5 } : { text: isTouchDevice ? 'Joystick a la izquierda · desliza a la derecha para mirar' : 'Haz clic para mirar con el mouse · WASD para caminar', t: 4 };
+    $('#help').textContent = isTouchDevice ? 'Mueve con el joystick (izquierda), mira deslizando (derecha), ⤒ para saltar. Entra a los portales morados para jugar.'
+      : 'Clic para mirar con el mouse (Esc suelta el mouse) · WASD caminar · ←/→ girar · ESPACIO saltar · entra a los portales morados para jugar · E para entrar';
+    this.renderPanel();
+  }
+  inJump(q) { return q.x > W - 110 && q.y > H - 120; }
+  stop() {
+    W3.pos = { x: this.p.x, y: this.p.y, z: this.p.z, vy: 0 }; W3.yaw = this.yaw;
+    document.removeEventListener('pointerlockchange', this.onLock); document.removeEventListener('mousemove', this.onMove); cv.removeEventListener('mousedown', this.onDown);
+    cv.removeEventListener('touchstart', this.onTS); cv.removeEventListener('touchmove', this.onTM); cv.removeEventListener('touchend', this.onTE); cv.removeEventListener('touchcancel', this.onTE);
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.cv3.style.display = 'none'; const el = $('#storyPanel'); el.style.display = 'none'; el.style.top = ''; el.style.bottom = '';
+    if (this.scene) this.scene.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+  }
+  hud() { return `<span>🗺️ Modo Historia 3D</span><span>🪙 ${STORY.coins} fichas</span><span>🏠 ${housePct()}% de tu hogar</span>`; }
+  // arma todos los bloques como "instancias" (rápido) agrupadas por tipo
+  rebuild() {
+    while (this.world.children.length) { const o = this.world.children.pop(); if (o.geometry) o.geometry.dispose(); }
+    const V = new VoxelWorld(); this.V = V;
+    if (STORY.house) this.houseTop = buildVoxelHouse(V, STORY.house);
+    else { for (let x = -5; x <= 5; x++) for (const z of [-5, 5]) V.small(x + 0.5, 0, z + 0.5, 'plank', 0.2, 0.8, 0.2); V.small(0.5, 0, 6.5, 'plank', 0.2, 1.6, 0.2); V.small(0.5, 1.4, 6.5, 'plank', 1.6, 0.8, 0.1); }
+    this.gates = [];
+    for (const pl of PLACES.filter(p => !p.house)) { const [x, z] = PLACES3D[pl.id]; const g = buildPlace(V, pl, x, z); this.gates.push({ pl, ...g, x, z }); }
+    // caminos desde tu hogar a cada lugar
+    for (const g of this.gates) { const n = Math.ceil(Math.hypot(g.gx, g.gz)); for (let i = 7; i < n - 1; i++) { const t = i / n, x = Math.round(g.gx * t), z = Math.round(g.gz * t); for (const [dx, dz] of [[0, 0], [1, 0], [0, 1]]) if (!V.get(x + dx, 0, z + dz)) V.small(x + dx + 0.5, -0.03, z + dz + 0.5, 'path', 1, 0.08, 1); } }
+    const rnd = seeded(42); // árboles alrededor del mundo
+    for (let i = 0; i < 70; i++) { const a = rnd() * 6.3, r = 34 + rnd() * 14; V.tree(Math.round(Math.cos(a) * r), Math.round(Math.sin(a) * r), 4 + (rnd() * 3 | 0)); }
+    for (let i = 0; i < 60; i++) { const x = (rnd() - 0.5) * 60, z = (rnd() - 0.5) * 60; if (Math.hypot(x, z) > 11) V.small(x, 0, z, ['pink', 'flowerY', 'flowerP'][i % 3], 0.25, 0.35, 0.25); }
+    const groups = {}, M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3();
+    for (const [k, t] of V.b) { const [x, y, z] = k.split(',').map(Number); (groups[t] = groups[t] || []).push([x + 0.5, y + 0.5, z + 0.5, 1, 1, 1]); }
+    for (const d of V.deco) (groups[d.t] = groups[d.t] || []).push([d.x, d.y + d.sy / 2, d.z, d.sx, d.sy, d.sz]);
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    for (const t in groups) {
+      const arr = groups[t], mat = W3.mats[t] || W3.mats.stone, mesh = new THREE.InstancedMesh(geo, mat, arr.length);
+      arr.forEach((a, i) => { P.set(a[0], a[1], a[2]); S.set(a[3], a[4], a[5]); M.compose(P, Q, S); mesh.setMatrixAt(i, M); });
+      mesh.instanceMatrix.needsUpdate = true; if (mat.transparent) mesh.renderOrder = 1; this.world.add(mesh);
+    }
+    // portales morados y carteles
+    this.portals = [];
+    for (const g of this.gates) {
+      const pm = new THREE.Mesh(new THREE.PlaneGeometry(3, 4), new THREE.MeshBasicMaterial({ color: 0xa25cff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+      pm.position.set(g.gx + 0.5, 2, g.gz + 0.5); if (g.alongX) pm.rotation.y = Math.PI / 2; this.world.add(pm); this.portals.push(pm);
+      const lab = textSprite(`${g.pl.icon} ${g.pl.name}`); lab.position.set(g.gx + 0.5, 6.6, g.gz + 0.5); this.world.add(lab);
+      const sub = textSprite(`📁 ${placeSubject(g.pl).name}`, '#ffd23f'); sub.scale.multiplyScalar(0.7); sub.position.set(g.gx + 0.5, 5.75, g.gz + 0.5); this.world.add(sub);
+    }
+    const h = HOUSES.find(x => x.id === STORY.house);
+    const hl = textSprite(h ? `${h.icon} Tu ${h.name.toLowerCase()} · ${housePct()}%` : '🏚️ Tu terreno: elige tu hogar'); hl.position.set(0.5, (this.houseTop || 3) + 2, 0.5); this.world.add(hl);
+  }
+  collides(x, y, z) { // ¿el cuerpo del jugador (0.6 x 1.75) choca con un bloque sólido?
+    const r = 0.3;
+    for (let bx = Math.floor(x - r); bx <= Math.floor(x + r); bx++) for (let bz = Math.floor(z - r); bz <= Math.floor(z + r); bz++) for (let by = Math.floor(y); by <= Math.floor(y + 1.7); by++) {
+      const t = this.V.get(bx, by, bz); if (t && !NONSOLID.has(t)) return true;
+    }
+    return false;
+  }
+  renderPanel() {
+    const el = $('#storyPanel'), n = this.near;
+    el.style.display = 'block'; el.style.top = n ? '' : '54px'; el.style.bottom = n ? '' : 'auto';
+    if (n === 'house') { el.style.top = ''; el.style.bottom = ''; this.ui.onChange = () => this.rebuild(); return renderShopPanel(el, this.ui, () => this.renderPanel()); }
+    if (!n) {
+      const games = PLACES.filter(p => !p.house), ids = new Set(games.map(p => placeSubject(p).id)), same = ids.size === 1 ? [...ids][0] : '';
+      el.innerHTML = `<div class="sp-row"><div><b>📁 Materia de las preguntas</b><br><small>Para todos los lugares · tu hogar y tus fichas no cambian</small></div>
+        <select data-all>${same ? '' : '<option value="" selected>Varias materias</option>'}${SUBJECTS.map(s => `<option value="${s.id}"${s.id === same ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select></div>`;
+      el.onclick = null;
+      el.onchange = e => { if (!e.target.matches('[data-all]') || !e.target.value) return; for (const p of games) STORY.zones[p.id] = e.target.value; saveStory(); this.rebuild(); this.renderPanel(); };
+      return;
+    }
+    const pl = n.pl, subj = placeSubject(pl);
+    el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b> · <small>${pl.desc}</small><br>
+      <label><small>Preguntas de:</small> <select data-subj>${SUBJECTS.map(s => `<option value="${s.id}"${s === subj ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select></label></div>
+      <button class="primary" data-enter>Entrar ▶ (E)</button></div>`;
+    el.onclick = e => { if (e.target.closest('[data-enter]')) this.enter(pl); };
+    el.onchange = e => { if (e.target.matches('[data-subj]')) { STORY.zones[pl.id] = e.target.value; saveStory(); this.rebuild(); } };
+  }
+  enter(pl) {
+    const subj = placeSubject(pl);
+    if (!subj.questions.length) { this.banner = { text: `📁 ${subj.name} no tiene preguntas: elige otra materia`, t: 3 }; return; }
+    // aparecer un poco afuera del portal al volver
+    const g = this.gates.find(x => x.pl === pl); const back = Math.hypot(g.gx, g.gz);
+    this.p.x = g.gx * (1 - 3 / back) + 0.5; this.p.z = g.gz * (1 - 3 / back) + 0.5; this.yaw = Math.atan2(-g.gx, -g.gz) + Math.PI;
+    startGame(pl.game, { story: true, zone: pl.id, subject: subj.id });
+  }
+  update(dt) {
+    if (this.dead) return; this.time += dt; dt = Math.min(dt, 0.05);
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (this.ui.flash) { this.ui.flash.t -= dt; if (this.ui.flash.t <= 0) this.ui.flash = null; }
+    // girar con flechas (útil con touchpad)
+    this.yaw += ((keys.arrowleft || keys.q ? 1 : 0) - (keys.arrowright ? 1 : 0)) * dt * 2.2;
+    let f = (keys.w || keys.arrowup ? 1 : 0) - (keys.s || keys.arrowdown ? 1 : 0), s = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+    const joy = Object.values(this.touches).find(t => t.kind === 'joy');
+    if (joy) { const dx = joy.x - joy.x0, dy = joy.y - joy.y0, d = Math.hypot(dx, dy); if (d > 8) { const m = Math.min(1, d / 60); s = dx / d * m; f = -dy / d * m; } }
+    this.joy = joy;
+    const sp = keys.shift ? 7 : 5, sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
+    const vx = (-sinY * f + cosY * s) * sp * dt, vz = (-cosY * f - sinY * s) * sp * dt, p = this.p;
+    if (!this.collides(p.x + vx, p.y + 0.05, p.z)) p.x += vx; else if (!this.collides(p.x + vx, p.y + 1.05, p.z) && p.onGround) { p.y += 1; p.x += vx; } // sube escalones de 1 bloque
+    if (!this.collides(p.x, p.y + 0.05, p.z + vz)) p.z += vz; else if (!this.collides(p.x, p.y + 1.05, p.z + vz) && p.onGround) { p.y += 1; p.z += vz; }
+    p.x = Math.max(-45, Math.min(45, p.x)); p.z = Math.max(-45, Math.min(45, p.z));
+    const jumpKey = keys[' '], was = this.pkj; this.pkj = jumpKey;
+    if (((jumpKey && !was) || this.jumpReq) && p.onGround) p.vy = 7.5; this.jumpReq = false;
+    p.vy -= 22 * dt; let ny = p.y + p.vy * dt;
+    if (p.vy < 0) { if (ny < 0) { ny = 0; p.vy = 0; } else if (this.collides(p.x, ny, p.z)) { ny = Math.floor(ny) + 1; p.vy = 0; } }
+    else if (this.collides(p.x, ny, p.z)) { p.vy = 0; ny = p.y; }
+    p.onGround = ny <= 0.001 || this.collides(p.x, ny - 0.05, p.z); p.y = ny;
+    // ¿cerca de un portal o de tu hogar?
+    let near = null; for (const g of this.gates) if (Math.hypot(p.x - (g.gx + 0.5), p.z - (g.gz + 0.5)) < 2.6) near = g;
+    if (!near && Math.hypot(p.x, p.z) < 9.5) near = 'house';
+    if (near !== this.near) { this.near = near; this.renderPanel(); }
+    // entrar caminando a través del portal o con E
+    const ek = keys.e || keys.enter, wasE = this.pke; this.pke = ek;
+    if (near && near !== 'house' && ((ek && !wasE) || Math.hypot(p.x - (near.gx + 0.5), p.z - (near.gz + 0.5)) < 0.9)) return this.enter(near.pl);
+  }
+  draw() {
+    if (this.dead) return;
+    const r = this.r; r.setSize(W, H, false); this.cam.aspect = W / H; this.cam.updateProjectionMatrix();
+    const p = this.p, bob = (this.p.onGround && (keys.w || keys.s || keys.a || keys.d || this.joy)) ? Math.sin(this.time * 10) * 0.05 : 0;
+    this.cam.position.set(p.x, p.y + 1.6 + bob, p.z);
+    this.cam.rotation.order = 'YXZ'; this.cam.rotation.set(this.pitch, this.yaw, 0);
+    for (const pm of this.portals || []) { pm.material.opacity = 0.45 + Math.sin(this.time * 3) * 0.15; }
+    r.render(this.scene, this.cam);
+    // capa 2D encima: mira, joystick, avisos
+    const c = ctx; c.clearRect(0, 0, W, H);
+    c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(W / 2 - 8, H / 2); c.lineTo(W / 2 + 8, H / 2); c.moveTo(W / 2, H / 2 - 8); c.lineTo(W / 2, H / 2 + 8); c.stroke();
+    if (isTouchDevice) {
+      const j = this.joy, bx = j ? j.x0 : 90, by = j ? j.y0 : H - 100;
+      c.globalAlpha = 0.45; c.fillStyle = '#000'; c.beginPath(); c.arc(bx, by, 55, 0, 7); c.fill();
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(j ? bx + Math.max(-55, Math.min(55, j.x - j.x0)) : bx, j ? by + Math.max(-55, Math.min(55, j.y - j.y0)) : by, 24, 0, 7); c.fill();
+      c.fillStyle = '#000'; c.beginPath(); c.roundRect(W - 100, H - 110, 80, 80, 18); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 34px system-ui'; c.textAlign = 'center'; c.fillText('⤒', W - 60, H - 58); c.globalAlpha = 1;
+    } else if (!this.locked) {
+      c.fillStyle = '#000a'; c.beginPath(); c.roundRect(W / 2 - 150, H / 2 + 24, 300, 34, 17); c.fill();
+      c.fillStyle = '#fff'; c.font = '600 14px system-ui'; c.textAlign = 'center'; c.fillText('🖱️ Haz clic para mirar con el mouse', W / 2, H / 2 + 46);
+    }
+    banner2(c, this.ui.flash || this.banner, 40);
   }
 };
 
