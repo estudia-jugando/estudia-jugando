@@ -81,6 +81,8 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #catchQ .lanes div.empty{opacity:.3;background:none}
 #storyPanel{display:none;position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:min(760px,calc(100% - 20px));max-height:45%;overflow:auto;background:#10151fee;border:1px solid var(--line);border-radius:14px;padding:12px 14px;z-index:2;font-size:14px}
 #storyPanel select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;margin-top:4px;max-width:100%}
+/* en celular el panel va arriba para no tapar el joystick */
+.touch #storyPanel{top:8px!important;bottom:auto!important;max-height:40%}
 .sp-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .sp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px;margin-top:8px}
 .sp-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 6px;font-size:13px;text-align:center}
@@ -907,6 +909,7 @@ window.addEventListener('mousemove', e => {
 cv.addEventListener('mousedown', e => { Object.assign(mouse, pos(e)); mouse.down = true; mouse.tap = true; });
 window.addEventListener('mouseup', () => mouse.down = false);
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+if (isTouchDevice) document.body.classList.add('touch');
 touch.pts = []; // todos los dedos en pantalla (para botones simultáneos)
 const setPts = e => { touch.pts = [...e.touches].map(t => pos(t)); };
 cv.addEventListener('touchstart', e => { e.preventDefault(); setPts(e); touch.active = true; touch.tap = true; Object.assign(touch, pos(e.changedTouches[0])); touch.sx = touch.x; touch.sy = touch.y; }, { passive: false });
@@ -3649,23 +3652,110 @@ GAMES.world3d = class {
     ground.rotation.x = -Math.PI / 2; this.scene.add(ground);
     this.world = new THREE.Group(); this.scene.add(this.world);
     this.p = W3.pos ? { ...W3.pos } : { x: 0.5, y: 0, z: 18, vy: 0 }; this.yaw = W3.pos ? W3.yaw : 0; this.pitch = -0.05;
-    this.rebuild(); this.setupPet();
+    this.rebuild(); this.setupPet(); this.initChores();
     // controles
     this.onLock = () => { this.locked = document.pointerLockElement === cv; };
     this.onMove = e => { if (this.locked) { this.yaw -= e.movementX * 0.0025; this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch - e.movementY * 0.0025)); } };
-    this.onDown = e => { if (!isTouchDevice && !this.locked && cv.requestPointerLock) cv.requestPointerLock(); };
+    this.onDown = e => {
+      const b = this.inPetBtn(pos(e)); if (b) { this.petAction(b); return; } // botones de la mascota
+      if (!isTouchDevice && !this.locked && cv.requestPointerLock) cv.requestPointerLock();
+    };
     document.addEventListener('pointerlockchange', this.onLock); document.addEventListener('mousemove', this.onMove); cv.addEventListener('mousedown', this.onDown);
     this.touches = {}; this.joy = null;
-    this.onTS = e => { for (const t of e.changedTouches) { const q = pos(t); if (this.inJump(q)) { this.jumpReq = true; continue; } this.touches[t.identifier] = { kind: q.x < W * 0.45 ? 'joy' : 'look', x0: q.x, y0: q.y, x: q.x, y: q.y }; } };
+    this.onTS = e => { for (const t of e.changedTouches) { const q = pos(t); if (this.inJump(q)) { this.jumpReq = true; continue; } const pb = this.inPetBtn(q); if (pb) { this.petAction(pb); continue; } this.touches[t.identifier] = { kind: q.x < W * 0.45 ? 'joy' : 'look', x0: q.x, y0: q.y, x: q.x, y: q.y }; } };
     this.onTM = e => { for (const t of e.changedTouches) { const s = this.touches[t.identifier]; if (!s) continue; const q = pos(t); if (s.kind === 'look') { this.yaw -= (q.x - s.x) * 0.006; this.pitch = Math.max(-1.3, Math.min(1.3, this.pitch - (q.y - s.y) * 0.006)); } s.x = q.x; s.y = q.y; } };
     this.onTE = e => { for (const t of e.changedTouches) delete this.touches[t.identifier]; };
     cv.addEventListener('touchstart', this.onTS); cv.addEventListener('touchmove', this.onTM); cv.addEventListener('touchend', this.onTE); cv.addEventListener('touchcancel', this.onTE);
     this.banner = opts.coinsMsg ? { text: `🪙 ¡Ganaste ${opts.coinsMsg} fichas! Ve a tu hogar a gastarlas`, t: 3.5 } : { text: isTouchDevice ? 'Joystick a la izquierda · desliza a la derecha para mirar' : 'Haz clic para mirar con el mouse · WASD para caminar', t: 4 };
-    $('#help').textContent = isTouchDevice ? 'Mueve con el joystick (izquierda), mira deslizando (derecha), ⤒ para saltar. Entra a los portales morados para jugar.'
-      : 'Clic para mirar con el mouse (Esc suelta el mouse) · WASD caminar · ←/→ girar · ESPACIO saltar · entra a los portales morados para jugar · E para entrar';
+    $('#help').textContent = isTouchDevice ? 'Joystick (izquierda) para caminar, desliza (derecha) para mirar, ⤒ saltar. Portales morados = juegos. Tareas: camina sobre el pasto alto para cortarlo, el huerto está detrás de tu casa, 🍖💕 para tu mascota.'
+      : 'Clic para mirar (Esc suelta el mouse) · WASD caminar · ←/→ girar · ESPACIO saltar · E entrar/usar · Tareas: pisa el pasto alto para cortarlo, huerto detrás de tu casa, F comida y C cariño a tu mascota';
     this.renderPanel();
   }
   inJump(q) { return q.x > W - 110 && q.y > H - 120; }
+  /* ===== tareas del hogar (sin preguntas): pocas fichas y con límite diario ===== */
+  initChores() {
+    const today = new Date().toISOString().slice(0, 10), old = STORY.chores || {};
+    if (old.day !== today) STORY.chores = { day: today, cut: [], mowed: false, harvests: 0, fed: false, love: 0, stage: old.stage || 0, t: old.t || 0 };
+    this.CH = STORY.chores; this.hearts = [];
+    this.choreGroup = new THREE.Group(); this.scene.add(this.choreGroup);
+    // pasto alto del día: posiciones distintas cada día, alrededor del hogar
+    const rnd = seeded(parseInt(today.replace(/-/g, ''), 10)); this.tufts = [];
+    for (let i = 0; this.tufts.length < 14 && i < 200; i++) {
+      const a = rnd() * Math.PI * 2, r = 8 + rnd() * 4, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if ((Math.abs(x) < 2.5 && z > 0) || (x > 7 && z > 0 && z < 6) || (Math.abs(x) < 4 && z < -8)) continue; // camino, piscina y huerto
+      this.tufts.push({ x, z, i: this.tufts.length });
+    }
+    this.GARDEN = { x: -0.5, z: -10.5 };
+    this.buildChores();
+  }
+  buildChores() {
+    const G = this.choreGroup; while (G.children.length) { const o = G.children.pop(); if (o.geometry) o.geometry.dispose(); }
+    const M = c => new THREE.MeshLambertMaterial({ color: c }), box = (w, h, d, c, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M(c)); m.position.set(x, y, z); G.add(m); return m; };
+    this.tuftMeshes = {};
+    for (const t of this.tufts) if (!this.CH.cut.includes(t.i)) {
+      const grp = new THREE.Group(); grp.position.set(t.x, 0, t.z); G.add(grp); this.tuftMeshes[t.i] = grp;
+      for (const [dx, dz, h] of [[0, 0, 0.9], [0.25, 0.1, 0.7], [-0.2, 0.18, 0.8], [0.1, -0.22, 0.6], [-0.25, -0.15, 0.75]]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, h, 0.12), M(h > 0.75 ? '#3e8e2f' : '#5aae3a')); m.position.set(dx, h / 2, dz); m.rotation.z = dx * 0.6; grp.add(m); }
+    }
+    // huerto: tierra seca → regada → con verduras listas para cosechar
+    const st = this.CH.stage, soil = st === 0 ? '#9a7a50' : '#4a321e', gx = this.GARDEN.x, gz = this.GARDEN.z;
+    for (let x = -3; x <= 2; x++) for (let z = -12; z <= -9; z++) {
+      box(0.96, 0.18, 0.96, soil, x + 0.5, 0.09, z + 0.5);
+      if (st === 0) box(0.12, 0.15, 0.12, '#b5b04a', x + 0.5, 0.25, z + 0.5);
+      else if (st === 1) box(0.16, 0.32, 0.16, '#5fbf3a', x + 0.5, 0.34, z + 0.5);
+      else { box(0.45, 0.5, 0.45, '#3f9a2f', x + 0.5, 0.43, z + 0.5); box(0.22, 0.22, 0.22, (x + z) % 2 ? '#ff6a2a' : '#e8322e', x + 0.5, 0.75, z + 0.5); }
+    }
+    for (let i = -4; i <= 3; i++) for (const [x, z] of [[i, -13], [i, -8]]) box(0.14, 0.6, 0.14, '#8a5f33', x + 0.5, 0.3, z + 0.5); // cerquita
+    box(0.6, 0.5, 0.4, '#5a8fd6', gx + 3.6, 0.25, gz + 1.8); box(0.12, 0.12, 0.5, '#5a8fd6', gx + 3.6, 0.45, gz + 2.2); // regadera
+    const lab = textSprite(st === 0 ? '🌱 Huerto: ¡riégalo!' : st === 1 ? '💧 Huerto regado: creciendo…' : '🥕 ¡Listo para cosechar!', '#ffd23f');
+    lab.scale.multiplyScalar(0.45); lab.position.set(gx, 2.6, gz - 1.5); G.add(lab);
+  }
+  reward(n, text) { // fichas de las tareas (con aviso)
+    if (n > 0) { STORY.coins += n; } saveStory();
+    this.banner = { text: n > 0 ? `${text} · 🪙 +${n}` : text, t: 2.5 };
+  }
+  heart(x, y, z, emo = '❤️') {
+    const c2 = document.createElement('canvas'); c2.width = c2.height = 64; const g2 = c2.getContext('2d'); g2.font = `48px ${EMOJI_FONT}`; g2.textAlign = 'center'; g2.fillText(emo, 32, 50);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c2), transparent: true, depthTest: false }));
+    sp.scale.set(0.5, 0.5, 1); sp.position.set(x + rand(-0.3, 0.3), y, z + rand(-0.3, 0.3)); sp.renderOrder = 11; this.scene.add(sp); this.hearts.push({ sp, t: 1.4 });
+  }
+  gardenAction() {
+    const C = this.CH;
+    if (C.stage === 0) { C.stage = 1; C.t = Date.now(); for (let i = 0; i < 8; i++) this.heart(this.GARDEN.x + rand(-2, 2), 1, this.GARDEN.z, '💧'); this.reward(2, '💧 Regaste el huerto: vuelve en un rato a cosechar'); }
+    else if (C.stage === 2) {
+      C.stage = 0; for (let i = 0; i < 8; i++) this.heart(this.GARDEN.x + rand(-2, 2), 1, this.GARDEN.z, ['🥕', '🍅'][i % 2]);
+      C.harvests++; this.reward(C.harvests <= 3 ? 5 : 0, C.harvests <= 3 ? '🧺 ¡Buena cosecha!' : '🧺 Cosechaste (hoy ya no da más fichas)');
+    }
+    this.buildChores(); this.renderPanel();
+  }
+  petAction(kind) {
+    if (!this.petObj) return; const q = this.petPos, C = this.CH, P = PETS.find(p => p.id === STORY.pet);
+    if (kind === 'food') {
+      const bowl = new THREE.Group(); const m1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.5), new THREE.MeshLambertMaterial({ color: 0xd52b1e })), m2 = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.06, 0.38), new THREE.MeshLambertMaterial({ color: 0x9a6a3a }));
+      m1.position.y = 0.075; m2.position.y = 0.17; bowl.add(m1, m2); bowl.position.set(q.x + Math.sin(q.face) * 0.6, q.y, q.z + Math.cos(q.face) * 0.6); this.scene.add(bowl);
+      this.bowl = { g: bowl, t: 4 }; this.petEat = 3; for (let i = 0; i < 4; i++) this.heart(q.x, q.y + 1.2, q.z, i % 2 ? '😋' : '❤️');
+      if (!C.fed) { C.fed = true; this.reward(3, `🍖 ${P.name} comió feliz`); } else this.reward(0, `🍖 ${P.name} ya comió hoy, pero igual le gustó`);
+    } else {
+      this.petHop = 1; for (let i = 0; i < 6; i++) this.heart(q.x, q.y + 1.1 + i * 0.1, q.z);
+      C.love = (C.love || 0) + 1; this.reward(C.love <= 3 ? 1 : 0, `💕 A ${P.name} le encantó el cariño`);
+    }
+  }
+  petBtns() { const s = 54, x = W - s - 12, y = Math.round(H * 0.38); return { food: { x, y, s }, love: { x, y: y + s + 12, s } }; }
+  inPetBtn(q) { if (!this.petObj) return null; const B = this.petBtns(); for (const k in B) { const b = B[k]; if (q.x > b.x && q.x < b.x + b.s && q.y > b.y && q.y < b.y + b.s) return k; } return null; }
+  choreUpdate(dt) {
+    const p = this.p, C = this.CH;
+    for (const t of this.tufts) if (!C.cut.includes(t.i) && Math.hypot(p.x - t.x, p.z - t.z) < 0.9) { // cortar pasto caminando encima
+      C.cut.push(t.i); const m = this.tuftMeshes[t.i]; if (m) this.choreGroup.remove(m);
+      for (let k = 0; k < 3; k++) this.heart(t.x, 0.6, t.z, '🌿');
+      if (C.cut.length >= this.tufts.length && !C.mowed) { C.mowed = true; this.reward(6, '✂️ ¡Cortaste todo el pasto!'); }
+      else { saveStory(); this.banner = { text: `✂️ Pasto cortado ${C.cut.length}/${this.tufts.length}`, t: 1.2 }; }
+    }
+    if (C.stage === 1 && Date.now() - C.t > 45000) { C.stage = 2; saveStory(); this.buildChores(); if (this.near === 'garden') this.renderPanel(); }
+    for (const h of this.hearts) { h.t -= dt; h.sp.position.y += dt * 0.9; h.sp.material.opacity = Math.min(1, h.t); if (h.t <= 0) this.scene.remove(h.sp); }
+    this.hearts = this.hearts.filter(h => h.t > 0);
+    if (this.bowl) { this.bowl.t -= dt; if (this.bowl.t <= 0) { this.scene.remove(this.bowl.g); this.bowl = null; } }
+    const pk = (k) => { const v = keys[k], w = this['pk_' + k]; this['pk_' + k] = v; return v && !w; };
+    if (pk('f')) this.petAction('food'); if (pk('c')) this.petAction('love');
+  }
   setupPet() { // tu mascota: aparece a tu lado y te sigue
     if (this.petObj) this.scene.remove(this.petObj.g);
     this.petObj = null; if (!STORY.pet) return;
@@ -3680,10 +3770,14 @@ GAMES.world3d = class {
     this.cv3.style.display = 'none'; const el = $('#storyPanel'); el.style.display = 'none'; el.style.top = ''; el.style.bottom = '';
     if (this.scene) this.scene.traverse(o => { if (o.geometry) o.geometry.dispose(); });
   }
-  hud() { return `<span>🗺️ Modo Historia 3D</span><span>🪙 ${coinsText()} fichas</span><span>🏠 ${housePct()}% de tu hogar</span>`; }
+  hud() {
+    const C = this.CH, done = C ? [C.mowed, C.harvests > 0, C.fed, C.love > 0].filter(Boolean).length : 0;
+    return `<span>🗺️ Modo Historia 3D</span><span>🪙 ${coinsText()} fichas</span><span>🏠 ${housePct()}% de tu hogar</span><span title="cortar pasto · cosechar · dar comida · cariño">📋 Tareas de hoy ${done}/4</span>`;
+  }
   // arma todos los bloques como "instancias" (rápido) agrupadas por tipo
   rebuild() {
     while (this.world.children.length) { const o = this.world.children.pop(); if (o.geometry) o.geometry.dispose(); }
+    this.labels = [];
     const V = new VoxelWorld(); this.V = V;
     if (STORY.house) this.houseTop = buildVoxelHouse(V, STORY.house);
     else { for (let x = -5; x <= 5; x++) for (const z of [-5, 5]) V.small(x + 0.5, 0, z + 0.5, 'plank', 0.2, 0.8, 0.2); V.small(0.5, 0, 6.5, 'plank', 0.2, 1.6, 0.2); V.small(0.5, 1.4, 6.5, 'plank', 1.6, 0.8, 0.1); }
@@ -3711,6 +3805,7 @@ GAMES.world3d = class {
       pm.position.set(g.gx + 0.5, 2, g.gz + 0.5); if (g.alongX) pm.rotation.y = Math.PI / 2; this.world.add(pm); this.portals.push(pm);
       const lab = textSprite(`${g.pl.icon} ${g.pl.name}`); lab.position.set(g.gx + 0.5, 6.6, g.gz + 0.5); this.world.add(lab);
       const sub = textSprite(`📁 ${placeSubject(g.pl).name}`, '#ffd23f'); sub.scale.multiplyScalar(0.7); sub.position.set(g.gx + 0.5, 5.75, g.gz + 0.5); this.world.add(sub);
+      (this.labels = this.labels || []).push(lab, sub);
     }
     const h = HOUSES.find(x => x.id === STORY.house);
     const hl = textSprite(h ? `${h.icon} Tu ${h.name.toLowerCase()} · ${housePct()}%` : '🏚️ Tu terreno: elige tu hogar'); hl.position.set(0.5, (this.houseTop || 3) + 2, 0.5); this.world.add(hl);
@@ -3728,7 +3823,30 @@ GAMES.world3d = class {
   renderPanel() {
     const el = $('#storyPanel'), n = this.near;
     el.style.display = 'block'; el.style.top = n ? '' : '54px'; el.style.bottom = n ? '' : 'auto';
-    if (n === 'house') { el.style.top = ''; el.style.bottom = ''; this.ui.onChange = () => this.rebuild(); return renderShopPanel(el, this.ui, () => this.renderPanel()); }
+    if (n === 'garden') { // tarea del huerto
+      el.style.top = ''; el.style.bottom = '';
+      const C = this.CH, left = Math.max(0, Math.ceil((45000 - (Date.now() - C.t)) / 1000));
+      el.innerHTML = `<div class="sp-row"><div><b>🥕 Tu huerto</b><br><small>${C.stage === 0 ? 'La tierra está seca.' : C.stage === 1 ? `Creciendo… vuelve en ${left} s.` : '¡Las verduras están listas!'} · Cosechas que dan fichas hoy: ${Math.max(0, 3 - C.harvests)}</small></div>
+        ${C.stage === 1 ? '<button disabled>⏳ Creciendo</button>' : `<button class="primary" data-garden>${C.stage === 0 ? '💧 Regar (E)' : '🧺 Cosechar (E)'}</button>`}</div>`;
+      el.onchange = null; el.onclick = e => { if (e.target.closest('[data-garden]')) this.gardenAction(); };
+      return;
+    }
+    if (n === 'house') {
+      el.style.top = ''; el.style.bottom = '';
+      if (!this.shopOpen && STORY.house) { // barra pequeña para no tapar la pantalla mientras caminas por el patio
+        const h = HOUSES.find(x => x.id === STORY.house);
+        el.innerHTML = `<div class="sp-row"><div><b>${h.icon} Tu ${h.name.toLowerCase()}</b> · <small>${housePct()}% terminado · 🪙 ${coinsText()}</small></div><button class="primary" data-openshop>🛒 Abrir tienda</button></div>`;
+        el.onchange = null; el.onclick = e => { if (e.target.closest('[data-openshop]')) { this.shopOpen = true; this.renderPanel(); } };
+        return;
+      }
+      this.ui.onChange = () => this.rebuild();
+      renderShopPanel(el, this.ui, () => this.renderPanel());
+      if (STORY.house) {
+        el.insertAdjacentHTML('afterbegin', '<div style="text-align:right;margin-bottom:6px"><button data-closeshop style="padding:4px 10px;font-size:12px">✕ Cerrar tienda</button></div>');
+        const inner = el.onclick; el.onclick = e => { if (e.target.closest('[data-closeshop]')) { this.shopOpen = false; this.renderPanel(); return; } inner(e); };
+      }
+      return;
+    }
     if (!n && (!STORY.pet || this.choosingPet)) { // elegir mascota gratis
       el.style.top = ''; el.style.bottom = '';
       el.innerHTML = `<b>🐾 Elige tu mascota gratis</b> <small>te va a acompañar por todo el mundo</small>
@@ -3789,19 +3907,24 @@ GAMES.world3d = class {
       const dx = tx - q.x, dz = tz - q.z, d = Math.hypot(dx, dz);
       if (d > 16) { q.x = tx; q.z = tz; } // si quedó muy lejos, aparece a tu lado
       const spd = Math.min(9, d * 3.2); this.petMoving = d > 0.25 ? Math.min(1, spd / 4) : 0;
-      if (d > 0.25) { q.x += dx / d * spd * dt; q.z += dz / d * spd * dt; q.face = Math.atan2(dx, dz); }
+      if (this.petEat > 0) { this.petEat -= dt; this.petMoving = 0; if (this.bowl) q.face = Math.atan2(this.bowl.g.position.x - q.x, this.bowl.g.position.z - q.z); } // comiendo: se queda en su plato
+      else if (d > 0.25) { q.x += dx / d * spd * dt; q.z += dz / d * spd * dt; q.face = Math.atan2(dx, dz); }
       else q.face += ((Math.atan2(p.x - q.x, p.z - q.z) - q.face + Math.PI * 3) % (Math.PI * 2) - Math.PI) * Math.min(1, dt * 5);
       q.y += (p.y - q.y) * Math.min(1, dt * 6);
-      const hop = this.petMoving ? Math.abs(Math.sin(this.time * 13)) * 0.06 : 0;
+      if (this.petHop > 0) this.petHop = Math.max(0, this.petHop - dt * 1.2);
+      const hop = (this.petMoving ? Math.abs(Math.sin(this.time * 13)) * 0.06 : 0) + (this.petHop > 0 ? Math.abs(Math.sin(this.petHop * Math.PI * 3)) * 0.5 : 0); // salta feliz con el cariño
       this.petObj.g.position.set(q.x, q.y + hop, q.z); this.petObj.g.rotation.y = q.face;
       animatePet(this.petObj, this.time, this.petMoving);
     }
     // ¿cerca de un portal o de tu hogar?
     let near = null; for (const g of this.gates) if (Math.hypot(p.x - (g.gx + 0.5), p.z - (g.gz + 0.5)) < 2.6) near = g;
+    if (!near && this.GARDEN && Math.hypot(p.x - this.GARDEN.x, p.z - this.GARDEN.z) < 3.8) near = 'garden';
     if (!near && Math.hypot(p.x, p.z) < 13) near = 'house';
-    if (near !== this.near) { this.near = near; this.renderPanel(); }
+    if (near !== this.near) { if (near !== 'house') this.shopOpen = false; this.near = near; this.renderPanel(); }
     // entrar caminando a través del portal o con E
     const ek = keys.e || keys.enter, wasE = this.pke; this.pke = ek;
+    this.choreUpdate(dt);
+    if (near === 'garden') { if (ek && !wasE && this.CH.stage !== 1) this.gardenAction(); return; }
     if (near && near !== 'house' && ((ek && !wasE) || Math.hypot(p.x - (near.gx + 0.5), p.z - (near.gz + 0.5)) < 0.9)) return this.enter(near.pl);
   }
   draw() {
@@ -3812,6 +3935,9 @@ GAMES.world3d = class {
     this.cam.rotation.order = 'YXZ'; this.cam.rotation.set(this.pitch, this.yaw, 0);
     for (const pm of this.portals || []) { pm.material.opacity = 0.45 + Math.sin(this.time * 3) * 0.15; }
     for (const pp of this.yardPets || []) animatePet(pp, this.time + pp.g.position.x, 0);
+    // carteles: no se ven desde adentro de tu hogar ni desde muy lejos (antes se veían a través de las paredes)
+    const inside = Math.hypot(p.x - 0.5, p.z - 0.5) < 7 && (this.V.get(Math.floor(p.x), Math.floor(p.y) + 3, Math.floor(p.z)) || this.V.get(Math.floor(p.x), Math.floor(p.y) + 4, Math.floor(p.z)));
+    for (const l of this.labels || []) l.visible = !inside && Math.hypot(l.position.x - p.x, l.position.z - p.z) < 48;
     r.render(this.scene, this.cam);
     // capa 2D encima: mira, joystick, avisos
     const c = ctx; c.clearRect(0, 0, W, H);
@@ -3825,7 +3951,16 @@ GAMES.world3d = class {
       c.fillStyle = '#000a'; c.beginPath(); c.roundRect(W / 2 - 150, H / 2 + 24, 300, 34, 17); c.fill();
       c.fillStyle = '#fff'; c.font = '600 14px system-ui'; c.textAlign = 'center'; c.fillText('🖱️ Haz clic para mirar con el mouse', W / 2, H / 2 + 46);
     }
-    banner2(c, this.ui.flash || this.banner, 40);
+    if (this.petObj) { // botones de la mascota: comida y cariño
+      const B = this.petBtns(), C = this.CH;
+      for (const [k, emo, done] of [['food', '🍖', C && C.fed], ['love', '💕', C && C.love >= 3]]) {
+        const b = B[k]; c.globalAlpha = 0.85; c.fillStyle = '#10151f'; c.beginPath(); c.roundRect(b.x, b.y, b.s, b.s, 14); c.fill();
+        c.strokeStyle = done ? '#7bd389' : '#ffd23f'; c.lineWidth = 2; c.stroke(); c.globalAlpha = 1;
+        c.fillStyle = '#000'; c.font = `28px ${EMOJI_FONT}`; c.textAlign = 'center'; c.fillText(emo, b.x + b.s / 2, b.y + b.s * 0.68);
+      }
+      if (!isTouchDevice) { c.fillStyle = '#ffffffb0'; c.font = '600 11px system-ui'; c.textAlign = 'center'; c.fillText('F / C', B.food.x + B.food.s / 2, B.love.y + B.love.s + 14); }
+    }
+    banner2(c, this.ui.flash || this.banner, isTouchDevice ? Math.round(H * 0.5) : 40);
   }
 };
 
