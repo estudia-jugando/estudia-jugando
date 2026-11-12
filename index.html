@@ -627,7 +627,7 @@ async function cloudLoad() {
       } else {
         R.coins = Math.max(R.coins || 0, cs.coins || 0);
         R.owned = [...new Set([...(cs.owned || []), ...R.owned])];
-        R.house = cs.house || R.house;
+        R.house = cs.house || R.house; R.pet = cs.pet || R.pet;
         R.zones = Object.assign({}, R.zones, cs.zones || {});
         R.lastDay = [R.lastDay, cs.lastDay].filter(Boolean).sort().pop() || null;
       }
@@ -3313,16 +3313,17 @@ function makeBlockMaterials() {
   const L = (c, o = {}) => new THREE.MeshLambertMaterial({ map: blockTex(c, o), transparent: !!o.alpha, opacity: o.alpha || 1 });
   const lines = (col, vertical) => (g) => { g.fillStyle = col; for (let i = 0; i < 16; i += 4) vertical ? g.fillRect(i, 0, 1, 16) : g.fillRect(0, i, 16, 1); };
   const bricks = col => g => { g.fillStyle = col; for (let y = 0; y < 16; y += 4) { g.fillRect(0, y, 16, 1); for (let x = (y / 4) % 2 ? 0 : 4; x < 16; x += 8) g.fillRect(x, y, 1, 4); } };
+  const stains = g => { g.fillStyle = 'rgba(40,30,20,.45)'; for (const [x, y, w, h] of [[2, 3, 4, 3], [9, 1, 3, 5], [5, 10, 6, 3], [12, 9, 3, 4], [1, 13, 3, 2]]) g.fillRect(x, y, w, h); g.fillStyle = 'rgba(70,110,50,.5)'; g.fillRect(0, 14, 16, 2); g.fillRect(6, 13, 3, 1); };
   const crack = g => { g.fillStyle = '#2a2420'; let x = 3, y = 1; for (let i = 0; i < 12; i++) { g.fillRect(x, y, 1, 1); x += i % 3 ? 1 : -1; y += 1; } };
   return {
     dirt: L('#8b5a2b'), stone: L('#8a8d91', { draw: bricks('#6f7276') }), stoneDirty: L('#6f7a68', { draw: bricks('#55604f'), amp: 0.4 }),
-    cobble: L('#7a7d82', { amp: 0.5, noise: 120 }), plank: L('#b8864e', { draw: lines('#8a5f33') }), plankDirty: L('#8a7358', { draw: lines('#6a5640') }),
+    cobble: L('#7a7d82', { amp: 0.5, noise: 120 }), plank: L('#b8864e', { draw: lines('#8a5f33') }), plankDirty: L('#6e5a45', { draw: g => { lines('#4e3e2e')(g); stains(g); }, amp: 0.4 }),
     log: L('#6b4a2b', { draw: lines('#4e3420', true) }), leaves: L('#3f8a3a', { amp: 0.5, noise: 120 }), sand: L('#e2c27a'),
-    sandstone: L('#d9b56a', { draw: lines('#b8954f') }), sandDirty: L('#a8946a', { draw: lines('#8a7a52'), amp: 0.4 }),
-    snow: L('#f2f7fb', { amp: 0.08 }), snowDirty: L('#c9d0d6', { amp: 0.2 }), ice: L('#bfe3ff', { alpha: 0.85, amp: 0.1 }),
+    sandstone: L('#d9b56a', { draw: lines('#b8954f') }), sandDirty: L('#8f7a58', { draw: g => { lines('#6e5c40')(g); stains(g); }, amp: 0.45 }),
+    snow: L('#f2f7fb', { amp: 0.08 }), snowDirty: L('#9ea6ad', { draw: stains, amp: 0.35 }), ice: L('#bfe3ff', { alpha: 0.85, amp: 0.1 }),
     glass: L('#cfefff', { alpha: 0.45, amp: 0.05, draw: g => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, 16, 1); g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16); g.fillRect(0, 15, 16, 1); } }),
     board: L('#5c3a20', { draw: g => { g.fillStyle = '#3a2412'; g.fillRect(0, 5, 16, 2); g.fillRect(0, 11, 16, 2); } }),
-    wall: L('#f0d39a', { amp: 0.12 }), wallDirty: L('#a8957a', { amp: 0.35 }), crackWall: L('#c9b48e', { draw: crack, amp: 0.3 }),
+    wall: L('#f0d39a', { amp: 0.12 }), wallDirty: L('#8f7d64', { draw: stains, amp: 0.4 }), crackWall: L('#c9b48e', { draw: crack, amp: 0.3 }),
     crackStone: L('#7f8286', { draw: crack, amp: 0.3 }), brick: L('#a94434', { draw: bricks('#7a2f24') }),
     roofRed: L('#b5372b', { draw: lines('#8a2a20') }), roofDirty: L('#6e4a42', { draw: lines('#55372f') }), roofBlue: L('#2b59c3', { draw: lines('#1f4291') }),
     door: L('#7a4a2b', { draw: g => { g.fillStyle = '#5a3420'; g.fillRect(2, 2, 12, 12); g.fillStyle = '#ffd23f'; g.fillRect(11, 8, 2, 2); } }),
@@ -3393,30 +3394,44 @@ function buildVoxelHouse(V, type) {
     for (let i = 0; i <= 5; i++) for (let x = -5 + i; x <= 5 - i; x++) for (let z = -5 + i; z <= 5 - i; z++) {
       const edge = Math.abs(x) === 5 - i || Math.abs(z) === 5 - i;
       if (!edge && i < 4) continue;
-      if (i >= 3 && hole(x, i, z)) continue;
+      if (i >= 2 && hole(x, i, z)) continue;
       V.set(x, i, z, cracked(x, i, z) ? 'crackStone' : (fresh ? 'sandstone' : 'sandDirty'));
     }
     for (let y = 0; y < 2; y++) V.set(0, y, 5, null);
     win(-3, 1, 3); win(3, 1, 3); win(-3, 1, -3); win(3, 1, -3);
+    if (fresh) { // pirámide restaurada: punta de oro, franja de jeroglíficos y antorchas
+      V.set(0, 6, 0, 'gold');
+      for (let x = -4; x <= 4; x += 2) for (const z of [-5, 5]) if (x !== 0) V.small(x + 0.5, 1.3, z + (z > 0 ? 1.03 : -0.03), 'blue', 0.7, 0.35, 0.06);
+      V.small(-0.6, 2.2, 6.1, 'lamp', 0.25, 0.4, 0.25); V.small(1.6, 2.2, 6.1, 'lamp', 0.25, 0.4, 0.25);
+    }
     doorAt = { x: 0, z: 5, w: 1 }; top = 6;
   } else if (type === 'iglu') {
     for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) for (let y = 0; y <= 5; y++) {
       const d = Math.hypot(x, y * 1.05, z); if (d > 5.4 || d < 4.4) continue;
-      if (y >= 3 && hole(x, y, z)) continue;
+      if (y >= 2 && hole(x, y, z)) continue;
       V.set(x, y, z, cracked(x, y, z) ? 'crackStone' : (fresh ? 'snow' : 'snowDirty'));
     }
     for (let y = 0; y < 2; y++) for (let z = 4; z <= 7; z++) { V.set(-1, y, z, fresh ? 'snow' : 'snowDirty'); V.set(1, y, z, fresh ? 'snow' : 'snowDirty'); V.set(0, y, z, null); }
     for (let z = 4; z <= 7; z++) V.set(0, 2, z, fresh ? 'snow' : 'snowDirty');
     V.set(0, 2, 7, fresh ? 'snow' : 'snowDirty');
     win(-4, 2, 2); win(4, 2, 2);
+    if (fresh) { // iglú reluciente: farolitos en la entrada y un mono de nieve
+      V.small(-1.6, 1.6, 8.2, 'lamp', 0.3, 0.4, 0.3); V.small(2.6, 1.6, 8.2, 'lamp', 0.3, 0.4, 0.3);
+      V.small(-4.5, 0, 8.5, 'snow', 0.9, 0.8, 0.9); V.small(-4.5, 0.8, 8.5, 'snow', 0.65, 0.6, 0.65); V.small(-4.5, 1.4, 8.5, 'snow', 0.45, 0.45, 0.45);
+      V.small(-4.5, 1.58, 8.78, 'carrot', 0.08, 0.08, 0.3); V.small(-4.6, 1.7, 8.73, 'black', 0.07, 0.07, 0.03); V.small(-4.4, 1.7, 8.73, 'black', 0.07, 0.07, 0.03);
+    }
     doorAt = { x: 0, z: 7, w: 1 }; top = 6;
   } else if (type === 'arbol') {
     for (let y = 0; y < 7; y++) for (const [dx, dz] of [[0, 0], [1, 0], [0, 1], [1, 1]]) V.set(dx, y, dz - 2, 'log');
-    for (let y = 0; y < 7; y++) V.set(2, y, -1, 'plank'); // escalera
     const pl = fresh ? 'plank' : 'plankDirty';
+    // escalera de verdad: peldaños que suben de a 1 bloque hasta un balcón frente a la puerta
+    for (let i = 0; i < 7; i++) for (const z of [4, 5]) { V.set(-6 + i, i, z, pl); for (let y = 0; y < i; y++) V.set(-6 + i, y, z, 'log'); }
+    for (let x = 1; x <= 3; x++) for (let z = 3; z <= 5; z++) V.set(x, 7, z, pl); // balcón
+    for (let y = 0; y < 7; y++) V.set(3, y, 5, 'log');
     for (let x = -3; x <= 4; x++) for (let z = -5; z <= 2; z++) V.set(x, 7, z, pl);
     for (let x = -3; x <= 4; x++) for (let z = -5; z <= 2; z++) for (let y = 8; y < 11; y++) if (x === -3 || x === 4 || z === -5 || z === 2) V.set(x, y, z, cracked(x, y, z) ? 'crackWall' : pl);
-    for (let y = 8; y < 10; y++) V.set(2, y, 2, null); V.set(2, 7, -1, null);
+    for (let y = 8; y < 10; y++) V.set(2, y, 2, null);
+    if (fresh) for (const [lx, lz] of [[-3, 2], [4, 2], [-3, -5], [4, -5]]) { V.small(lx + 0.5, 6.2, lz + 0.5, 'black', 0.06, 0.8, 0.06); V.small(lx + 0.5, 5.8, lz + 0.5, 'lamp', 0.35, 0.4, 0.35); } // faroles colgantes
     for (let x = -4; x <= 5; x++) for (let z = -6; z <= 3; z++) if (!hole(x, 11, z)) V.set(x, 11, z, fresh ? 'roofRed' : 'roofDirty');
     win(-1, 9, 2); win(-3, 9, -1); win(4, 9, -1);
     for (let dx = -3; dx <= 4; dx++) for (let dz = -6; dz <= 3; dz++) for (let dy = 12; dy <= 13; dy++) if ((dx * dx + dz * dz) < 20 + dy) V.set(dx, dy, dz, 'leaves');
@@ -3433,6 +3448,7 @@ function buildVoxelHouse(V, type) {
     }
     for (let i = 0; i < 4; i++) for (let x = -4 + i; x <= 4 - i; x++) for (const z of [-4, 4]) V.set(x, 5 + i, z, wt(x, 5 + i, z)); // paredes triangulares bajo el techo
     for (let y = 5; y < 9; y++) V.set(3, y, -2, 'brick');
+    if (fresh) for (const wx of [-2, 2]) { V.small(wx + 0.5, 1.45, 5.15, 'plank', 1.1, 0.25, 0.3); for (const dx of [-0.3, 0, 0.3]) V.small(wx + 0.5 + dx, 1.7, 5.15, ['pink', 'flowerY', 'red'][(dx * 10 + 3) % 3 | 0], 0.18, 0.2, 0.18); } // maceteros bajo las ventanas
     doorAt = { x: 0, z: 4, w: 1, y: 1 }; top = 10;
   }
   const zFace = doorAt ? doorAt.z + 1 : 6; // cara del frente
@@ -3479,8 +3495,7 @@ function buildVoxelHouse(V, type) {
     for (const dz of [-0.13, 0.13]) V.small(X + 0.5 * s, 1.0 * s, Z + dz * s, fur, 0.1 * s, 0.16 * s, 0.1 * s);
     V.small(X - 0.5 * s, 0.6 * s, Z, fur, 0.1 * s, 0.4 * s, 0.1 * s);
   };
-  if (owns('perro')) pet(-3.5, 9.5, 'furBrown', 1.3);
-  if (owns('gato')) pet(2.5, 9, 'furOrange', 0.9);
+  // el perro y el gato del patio se dibujan como mascotas animadas (ver makePet)
   if (owns('resbalin')) { for (let i = 0; i < 3; i++) V.set(-11, i, 2 + i, 'plank'); for (let i = 0; i < 4; i++) V.small(-10.5, 2.6 - i * 0.7, 5.5 + i, 'red', 1, 0.15, 1); }
   if (owns('fuente')) { V.box(-8, 0, 8, -6, 0, 10, 'stone', true); V.small(-6.5, 0, 9.5, 'water', 0.95, 0.9, 0.95); V.small(-6.5, 0.9, 9.5, 'stone', 0.3, 1.2, 0.3); V.small(-6.5, 2.1, 9.5, 'water', 0.7, 0.3, 0.7); }
   if (owns('auto')) { const cx2 = 9, cz2 = 10.5; V.small(cx2, 0.35, cz2, 'red', 2.6, 0.8, 1.3); V.small(cx2 - 0.2, 1.15, cz2, 'glass', 1.3, 0.6, 1.2); for (const [dx, dz] of [[-0.85, -0.66], [0.85, -0.66], [-0.85, 0.66], [0.85, 0.66]]) V.small(cx2 + dx, 0, cz2 + dz, 'black', 0.55, 0.55, 0.16); V.small(cx2 + 1.32, 0.5, cz2 - 0.4, 'lamp', 0.05, 0.2, 0.25); V.small(cx2 + 1.32, 0.5, cz2 + 0.4, 'lamp', 0.05, 0.2, 0.25); }
@@ -3536,6 +3551,60 @@ function textSprite(text, color = '#fff') {
   sp.renderOrder = 10; sp.scale.set(w / (fs + 30) * 1.1, 1.1, 1); return sp;
 }
 
+// ===== mascotas de bloques (una gratis para elegir; te siguen por todo el mundo) =====
+const PETS = [
+  { id: 'perro', name: 'Perro', icon: '🐶', body: '#c68642', belly: '#f3d9b1', ears: 'floppy', earC: '#7a4a22', tail: 'thin', size: 1 },
+  { id: 'gato', name: 'Gato', icon: '🐱', body: '#f0a04b', belly: '#fff1dc', ears: 'pointy', earC: '#f0a04b', tail: 'long', stripes: '#c9742a', blush: true, size: 0.85 },
+  { id: 'conejo', name: 'Conejo', icon: '🐰', body: '#f6f4f2', belly: '#ffffff', ears: 'long', earC: '#f6f4f2', tail: 'puff', blush: true, size: 0.8 },
+  { id: 'zorro', name: 'Zorro', icon: '🦊', body: '#e8742c', belly: '#fff4e6', ears: 'pointy', earC: '#e8742c', earTip: '#3a2a20', legsC: '#3a2a20', tail: 'bushy', tailTip: '#ffffff', size: 0.95 },
+  { id: 'panda', name: 'Panda', icon: '🐼', body: '#fbfbfb', belly: '#fbfbfb', legsC: '#26262b', ears: 'round', earC: '#26262b', patch: '#26262b', tail: 'puff', size: 1.1 },
+  { id: 'pinguino', name: 'Pingüino', icon: '🐧', biped: true, size: 0.95 }
+];
+function makePet(kind) {
+  const P = PETS.find(p => p.id === kind) || PETS[0], g = new THREE.Group(), mats = {};
+  const M = c => mats[c] || (mats[c] = new THREE.MeshLambertMaterial({ color: c }));
+  const box = (w, h, d, c, x, y, z, parent = g) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M(c)); m.position.set(x, y, z); parent.add(m); return m; };
+  const eyes = (parent, y, z, sep) => { for (const s of [-1, 1]) { if (P.patch) box(0.16, 0.18, 0.02, P.patch, s * sep, y, z - 0.005, parent); box(0.11, 0.13, 0.03, '#ffffff', s * sep, y, z, parent); box(0.07, 0.09, 0.03, '#141414', s * sep, y - 0.01, z + 0.012, parent); box(0.03, 0.03, 0.02, '#ffffff', s * sep + 0.02, y + 0.03, z + 0.03, parent); } };
+  const parts = { g, legs: [], P };
+  if (P.biped) { // pingüino
+    const body = new THREE.Group(); g.add(body); parts.body = body;
+    box(0.62, 0.78, 0.52, '#1f2430', 0, 0.5, 0, body); box(0.44, 0.6, 0.06, '#ffffff', 0, 0.46, 0.27, body);
+    box(0.52, 0.42, 0.46, '#1f2430', 0, 1.08, 0, body); box(0.38, 0.26, 0.05, '#ffffff', 0, 1.04, 0.22, body);
+    eyes(body, 1.1, 0.26, 0.1); box(0.16, 0.08, 0.16, '#ff9f1c', 0, 1.0, 0.3, body);
+    parts.arms = [-1, 1].map(s => { const a = new THREE.Group(); a.position.set(s * 0.33, 0.78, 0); box(0.07, 0.45, 0.24, '#1f2430', 0, -0.2, 0, a); body.add(a); return a; });
+    for (const s of [-1, 1]) parts.legs.push(box(0.2, 0.07, 0.26, '#ff9f1c', s * 0.14, 0.035, 0.07));
+    g.scale.setScalar(P.size); return parts;
+  }
+  box(0.56, 0.42, 0.86, P.body, 0, 0.52, 0); box(0.44, 0.06, 0.66, P.belly, 0, 0.3, 0.02);
+  if (P.stripes) for (const z of [-0.22, 0, 0.22]) box(0.58, 0.06, 0.08, P.stripes, 0, 0.7, z);
+  for (const [x, z] of [[-0.17, 0.3], [0.17, 0.3], [-0.17, -0.3], [0.17, -0.3]]) {
+    const lg = new THREE.Group(); lg.position.set(x, 0.38, z); box(0.17, 0.34, 0.17, P.legsC || P.body, 0, -0.17, 0, lg); box(0.18, 0.06, 0.2, P.legsC ? P.legsC : P.belly, 0, -0.33, 0.02, lg); g.add(lg); parts.legs.push(lg);
+  }
+  const h = new THREE.Group(); h.position.set(0, 0.8, 0.42); g.add(h); parts.head = h;
+  box(0.52, 0.46, 0.46, P.body, 0, 0, 0.08, h); box(0.28, 0.18, 0.14, P.belly, 0, -0.1, 0.36, h); box(0.11, 0.08, 0.06, '#2a1a14', 0, -0.03, 0.44, h);
+  eyes(h, 0.07, 0.32, 0.13);
+  if (P.blush) for (const s of [-1, 1]) box(0.09, 0.05, 0.02, '#ff9fb5', s * 0.2, -0.06, 0.32, h);
+  for (const s of [-1, 1]) {
+    if (P.ears === 'floppy') { const e = box(0.12, 0.3, 0.2, P.earC, s * 0.29, -0.02, 0.06, h); e.rotation.z = s * 0.25; }
+    else if (P.ears === 'pointy') { box(0.15, 0.2, 0.1, P.earC, s * 0.16, 0.32, 0.04, h); box(0.07, 0.1, 0.02, P.earTip || '#ffb6c8', s * 0.16, 0.33, 0.1, h); if (P.earTip) box(0.15, 0.06, 0.1, P.earTip, s * 0.16, 0.42, 0.04, h); }
+    else if (P.ears === 'long') { box(0.12, 0.5, 0.1, P.earC, s * 0.11, 0.45, 0.02, h); box(0.06, 0.38, 0.02, '#ffb6c8', s * 0.11, 0.44, 0.08, h); }
+    else if (P.ears === 'round') box(0.17, 0.17, 0.08, P.earC, s * 0.21, 0.27, 0.04, h);
+  }
+  const t = new THREE.Group(); t.position.set(0, 0.64, -0.44); g.add(t); parts.tail = t;
+  if (P.tail === 'thin') { const k = box(0.09, 0.09, 0.38, P.body, 0, 0.1, -0.16, t); k.rotation.x = -0.6; }
+  else if (P.tail === 'long') { const k = box(0.08, 0.08, 0.55, P.body, 0, 0.16, -0.22, t); k.rotation.x = -0.9; }
+  else if (P.tail === 'bushy') { box(0.22, 0.22, 0.45, P.body, 0, 0.04, -0.22, t); box(0.23, 0.23, 0.13, P.tailTip, 0, 0.04, -0.47, t); }
+  else box(0.19, 0.19, 0.13, '#ffffff', 0, 0, -0.04, t);
+  g.scale.setScalar(P.size); return parts;
+}
+function animatePet(pp, t, moving) {
+  const sw = Math.sin(t * 13) * 0.65 * moving;
+  if (pp.P.biped) { pp.body.rotation.z = Math.sin(t * 9) * (0.08 + 0.12 * moving); pp.arms.forEach((a, i) => { a.rotation.z = (i ? -1 : 1) * (0.2 + Math.abs(Math.sin(t * 9)) * 0.4 * (moving + 0.3)); }); pp.legs.forEach((l, i) => { l.position.z = 0.07 + (i ? sw : -sw) * 0.15; }); return; }
+  pp.legs.forEach((l, i) => { l.rotation.x = (i === 0 || i === 3 ? sw : -sw); });
+  if (pp.tail) pp.tail.rotation.y = Math.sin(t * (moving ? 14 : 7)) * 0.55;
+  if (pp.head) pp.head.position.y = 0.8 + Math.sin(t * (moving ? 13 : 2)) * (moving ? 0.03 : 0.015);
+}
+
 GAMES.world3d = class {
   constructor(opts = {}) {
     this.meta = true; this.score = 0; this.ok = 0; this.bad = 0; this.time = 0; this.ui = { tab: 'arreglos' }; this.near = null;
@@ -3553,7 +3622,7 @@ GAMES.world3d = class {
     ground.rotation.x = -Math.PI / 2; this.scene.add(ground);
     this.world = new THREE.Group(); this.scene.add(this.world);
     this.p = W3.pos ? { ...W3.pos } : { x: 0.5, y: 0, z: 18, vy: 0 }; this.yaw = W3.pos ? W3.yaw : 0; this.pitch = -0.05;
-    this.rebuild();
+    this.rebuild(); this.setupPet();
     // controles
     this.onLock = () => { this.locked = document.pointerLockElement === cv; };
     this.onMove = e => { if (this.locked) { this.yaw -= e.movementX * 0.0025; this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch - e.movementY * 0.0025)); } };
@@ -3570,6 +3639,12 @@ GAMES.world3d = class {
     this.renderPanel();
   }
   inJump(q) { return q.x > W - 110 && q.y > H - 120; }
+  setupPet() { // tu mascota: aparece a tu lado y te sigue
+    if (this.petObj) this.scene.remove(this.petObj.g);
+    this.petObj = null; if (!STORY.pet) return;
+    this.petObj = makePet(STORY.pet); this.scene.add(this.petObj.g);
+    this.petPos = { x: this.p.x + 1.2, y: this.p.y, z: this.p.z + 0.8, face: Math.PI };
+  }
   stop() {
     W3.pos = { x: this.p.x, y: this.p.y, z: this.p.z, vy: 0 }; W3.yaw = this.yaw;
     document.removeEventListener('pointerlockchange', this.onLock); document.removeEventListener('mousemove', this.onMove); cv.removeEventListener('mousedown', this.onDown);
@@ -3612,6 +3687,9 @@ GAMES.world3d = class {
     }
     const h = HOUSES.find(x => x.id === STORY.house);
     const hl = textSprite(h ? `${h.icon} Tu ${h.name.toLowerCase()} · ${housePct()}%` : '🏚️ Tu terreno: elige tu hogar'); hl.position.set(0.5, (this.houseTop || 3) + 2, 0.5); this.world.add(hl);
+    // perro y gato comprados para el patio (animados)
+    this.yardPets = [];
+    if (STORY.house) for (const [id, x, z, r] of [['perro', -3.5, 9.5, 0.5], ['gato', 2.5, 9, -0.5]]) if (owns(id)) { const pp = makePet(id); pp.g.position.set(x, 0, z); pp.g.rotation.y = r; this.world.add(pp.g); this.yardPets.push(pp); }
   }
   collides(x, y, z) { // ¿el cuerpo del jugador (0.6 x 1.75) choca con un bloque sólido?
     const r = 0.3;
@@ -3624,11 +3702,20 @@ GAMES.world3d = class {
     const el = $('#storyPanel'), n = this.near;
     el.style.display = 'block'; el.style.top = n ? '' : '54px'; el.style.bottom = n ? '' : 'auto';
     if (n === 'house') { el.style.top = ''; el.style.bottom = ''; this.ui.onChange = () => this.rebuild(); return renderShopPanel(el, this.ui, () => this.renderPanel()); }
+    if (!n && (!STORY.pet || this.choosingPet)) { // elegir mascota gratis
+      el.style.top = ''; el.style.bottom = '';
+      el.innerHTML = `<b>🐾 Elige tu mascota gratis</b> <small>te va a acompañar por todo el mundo</small>
+        <div class="sp-grid">${PETS.map(p => `<button class="sp-item${STORY.pet === p.id ? ' have' : ''}" data-pet="${p.id}"><span class="sp-ico">${p.icon}</span>${p.name}</button>`).join('')}</div>`;
+      el.onchange = null;
+      el.onclick = e => { const b = e.target.closest('[data-pet]'); if (!b) return; STORY.pet = b.dataset.pet; saveStory(); this.choosingPet = false; this.setupPet(); const P = PETS.find(p => p.id === STORY.pet); this.banner = { text: `${P.icon} ¡${P.name} es tu nueva mascota!`, t: 2.5 }; this.renderPanel(); };
+      return;
+    }
     if (!n) {
       const games = PLACES.filter(p => !p.house), ids = new Set(games.map(p => placeSubject(p).id)), same = ids.size === 1 ? [...ids][0] : '';
       el.innerHTML = `<div class="sp-row"><div><b>📁 Materia de las preguntas</b><br><small>Para todos los lugares · tu hogar y tus fichas no cambian</small></div>
-        <select data-all>${same ? '' : '<option value="" selected>Varias materias</option>'}${SUBJECTS.map(s => `<option value="${s.id}"${s.id === same ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select></div>`;
-      el.onclick = null;
+        <div><select data-all>${same ? '' : '<option value="" selected>Varias materias</option>'}${SUBJECTS.map(s => `<option value="${s.id}"${s.id === same ? ' selected' : ''}>📁 ${esc(s.name)} (${s.questions.length})</option>`).join('')}</select>
+        <button data-petchange style="padding:5px 10px;font-size:12px">🐾 Mascota</button></div></div>`;
+      el.onclick = e => { if (e.target.closest('[data-petchange]')) { this.choosingPet = true; this.renderPanel(); } };
       el.onchange = e => { if (!e.target.matches('[data-all]') || !e.target.value) return; for (const p of games) STORY.zones[p.id] = e.target.value; saveStory(); this.rebuild(); this.renderPanel(); };
       return;
     }
@@ -3668,6 +3755,20 @@ GAMES.world3d = class {
     if (p.vy < 0) { if (ny < 0) { ny = 0; p.vy = 0; } else if (this.collides(p.x, ny, p.z)) { ny = Math.floor(ny) + 1; p.vy = 0; } }
     else if (this.collides(p.x, ny, p.z)) { p.vy = 0; ny = p.y; }
     p.onGround = ny <= 0.001 || this.collides(p.x, ny - 0.05, p.z); p.y = ny;
+    // la mascota te sigue: detrás tuyo cuando caminas, y se pone adelante a mirarte cuando te detienes
+    if (this.petObj) {
+      const q = this.petPos, moving = !!(f || s), bx = Math.sin(this.yaw), bz = Math.cos(this.yaw); // (bx,bz) = hacia atrás
+      const tx = moving ? p.x + bx * 1.7 + bz * 0.9 : p.x - bx * 2.2 + bz * 0.6, tz = moving ? p.z + bz * 1.7 - bx * 0.9 : p.z - bz * 2.2 - bx * 0.6;
+      const dx = tx - q.x, dz = tz - q.z, d = Math.hypot(dx, dz);
+      if (d > 16) { q.x = tx; q.z = tz; } // si quedó muy lejos, aparece a tu lado
+      const spd = Math.min(9, d * 3.2); this.petMoving = d > 0.25 ? Math.min(1, spd / 4) : 0;
+      if (d > 0.25) { q.x += dx / d * spd * dt; q.z += dz / d * spd * dt; q.face = Math.atan2(dx, dz); }
+      else q.face += ((Math.atan2(p.x - q.x, p.z - q.z) - q.face + Math.PI * 3) % (Math.PI * 2) - Math.PI) * Math.min(1, dt * 5);
+      q.y += (p.y - q.y) * Math.min(1, dt * 6);
+      const hop = this.petMoving ? Math.abs(Math.sin(this.time * 13)) * 0.06 : 0;
+      this.petObj.g.position.set(q.x, q.y + hop, q.z); this.petObj.g.rotation.y = q.face;
+      animatePet(this.petObj, this.time, this.petMoving);
+    }
     // ¿cerca de un portal o de tu hogar?
     let near = null; for (const g of this.gates) if (Math.hypot(p.x - (g.gx + 0.5), p.z - (g.gz + 0.5)) < 2.6) near = g;
     if (!near && Math.hypot(p.x, p.z) < 13) near = 'house';
@@ -3683,6 +3784,7 @@ GAMES.world3d = class {
     this.cam.position.set(p.x, p.y + 1.6 + bob, p.z);
     this.cam.rotation.order = 'YXZ'; this.cam.rotation.set(this.pitch, this.yaw, 0);
     for (const pm of this.portals || []) { pm.material.opacity = 0.45 + Math.sin(this.time * 3) * 0.15; }
+    for (const pp of this.yardPets || []) animatePet(pp, this.time + pp.g.position.x, 0);
     r.render(this.scene, this.cam);
     // capa 2D encima: mira, joystick, avisos
     const c = ctx; c.clearRect(0, 0, W, H);
