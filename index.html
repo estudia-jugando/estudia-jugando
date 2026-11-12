@@ -3324,7 +3324,13 @@ function makeBlockMaterials() {
     glass: L('#cfefff', { alpha: 0.45, amp: 0.05, draw: g => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, 16, 1); g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16); g.fillRect(0, 15, 16, 1); } }),
     board: L('#5c3a20', { draw: g => { g.fillStyle = '#3a2412'; g.fillRect(0, 5, 16, 2); g.fillRect(0, 11, 16, 2); } }),
     wall: L('#f0d39a', { amp: 0.12 }), wallDirty: L('#8f7d64', { draw: stains, amp: 0.4 }), crackWall: L('#c9b48e', { draw: crack, amp: 0.3 }),
-    crackStone: L('#7f8286', { draw: crack, amp: 0.3 }), brick: L('#a94434', { draw: bricks('#7a2f24') }),
+    crackStone: L('#7f8286', { draw: crack, amp: 0.3 }),
+    hiero: L('#d9b56a', { amp: 0.12, draw: g => { // jeroglíficos de colores
+      const C = ['#1f4ea8', '#c0392b', '#1b1b1b', '#2e8b57', '#c98a00']; g.fillStyle = '#b8954f'; g.fillRect(0, 0, 16, 1); g.fillRect(0, 15, 16, 1);
+      for (const [x, y, w, h, c] of [[2, 3, 2, 4, 0], [6, 2, 1, 5, 2], [9, 3, 3, 2, 1], [9, 6, 1, 2, 1], [13, 2, 1, 5, 3], [2, 9, 3, 1, 4], [3, 10, 1, 3, 4], [7, 9, 2, 2, 0], [7, 12, 3, 1, 2], [12, 9, 2, 4, 1]]) { g.fillStyle = C[c]; g.fillRect(x, y, w, h); }
+      g.fillStyle = '#1b1b1b'; g.fillRect(11, 11, 1, 1); g.fillRect(4, 4, 1, 1);
+    } }),
+    hieroOld: L('#a8946a', { amp: 0.4, draw: g => { g.fillStyle = 'rgba(60,45,30,.5)'; for (const [x, y, w, h] of [[2, 3, 2, 4], [6, 2, 1, 5], [9, 3, 3, 2], [13, 2, 1, 5], [2, 9, 3, 1], [7, 9, 2, 2], [12, 9, 2, 4]]) g.fillRect(x, y, w, h); g.fillStyle = 'rgba(40,30,20,.4)'; g.fillRect(0, 12, 16, 4); } }), brick: L('#a94434', { draw: bricks('#7a2f24') }),
     roofRed: L('#b5372b', { draw: lines('#8a2a20') }), roofDirty: L('#6e4a42', { draw: lines('#55372f') }), roofBlue: L('#2b59c3', { draw: lines('#1f4291') }),
     door: L('#7a4a2b', { draw: g => { g.fillStyle = '#5a3420'; g.fillRect(2, 2, 12, 12); g.fillStyle = '#ffd23f'; g.fillRect(11, 8, 2, 2); } }),
     gold: L('#f5c542', { amp: 0.2 }), water: L('#3a8fd6', { alpha: 0.75, amp: 0.15 }), white: L('#f5f5f5', { amp: 0.06 }), black: L('#26272b', { amp: 0.1 }),
@@ -3391,20 +3397,41 @@ function buildVoxelHouse(V, type) {
     }
     doorAt = { x: 0, z: 5, w: 3, h: 3 }; top = 10;
   } else if (type === 'piramide') {
-    for (let i = 0; i <= 5; i++) for (let x = -5 + i; x <= 5 - i; x++) for (let z = -5 + i; z <= 5 - i; z++) {
-      const edge = Math.abs(x) === 5 - i || Math.abs(z) === 5 - i;
-      if (!edge && i < 4) continue;
-      if (i >= 2 && hole(x, i, z)) continue;
-      V.set(x, i, z, cracked(x, i, z) ? 'crackStone' : (fresh ? 'sandstone' : 'sandDirty'));
+    // pirámide egipcia: 15x15 de base, maciza, con pasillo de entrada y cámara del tesoro adentro
+    const N = 7, outer = fresh ? 'sandstone' : 'sandDirty';
+    for (let i = 0; i <= N; i++) for (let x = -N + i; x <= N - i; x++) for (let z = -N + i; z <= N - i; z++) {
+      const surface = Math.abs(x) === N - i || Math.abs(z) === N - i || i === N;
+      if (surface && i >= 2 && hole(x, i, z)) { V.set(x, i, z, 'cobble'); continue; } // casco roto: se ve la piedra de adentro
+      V.set(x, i, z, surface ? (cracked(x, i, z) ? 'crackStone' : outer) : 'sandstone');
     }
-    for (let y = 0; y < 2; y++) V.set(0, y, 5, null);
-    win(-3, 1, 3); win(3, 1, 3); win(-3, 1, -3); win(3, 1, -3);
-    if (fresh) { // pirámide restaurada: punta de oro, franja de jeroglíficos y antorchas
-      V.set(0, 6, 0, 'gold');
-      for (let x = -4; x <= 4; x += 2) for (const z of [-5, 5]) if (x !== 0) V.small(x + 0.5, 1.3, z + (z > 0 ? 1.03 : -0.03), 'blue', 0.7, 0.35, 0.06);
-      V.small(-0.6, 2.2, 6.1, 'lamp', 0.25, 0.4, 0.25); V.small(1.6, 2.2, 6.1, 'lamp', 0.25, 0.4, 0.25);
-    }
-    doorAt = { x: 0, z: 5, w: 1 }; top = 6;
+    // pasillo (3 de ancho, 3 de alto) y cámara (7x6, 4 de alto)
+    for (let z = 2; z <= N; z++) for (let x = -1; x <= 1; x++) for (let y = 0; y < 3; y++) V.set(x, y, z, null);
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 2; z++) for (let y = 0; y < 4; y++) V.set(x, y, z, null);
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 2; z++) V.small(x + 0.5, -0.02, z + 0.5, 'sandstone', 1, 0.06, 1); // piso
+    // muros de jeroglíficos (pintados o borrosos)
+    const hier = fresh ? 'hiero' : 'hieroOld';
+    for (let x = -3; x <= 3; x++) for (let y = 0; y < 4; y++) V.set(x, y, -4, hier);
+    for (let z = -3; z <= 2; z++) for (let y = 0; y < 4; y++) { V.set(-4, y, z, hier); V.set(4, y, z, hier); }
+    for (let z = 3; z <= N; z++) for (let y = 0; y < 3; y++) { V.set(-2, y, z, hier); V.set(2, y, z, hier); }
+    // sarcófago de oro, tesoros, columnas y antorchas
+    V.small(0.5, 0, -1.5, 'sandstone', 1.4, 0.5, 2.6); V.small(0.5, 0.5, -1.5, 'gold', 1.2, 0.5, 2.4); V.small(0.5, 1.0, -0.5, 'blue', 0.7, 0.18, 0.6); V.small(0.5, 1.0, -2.2, 'gold', 0.9, 0.12, 1.2);
+    for (const [tx, tz] of [[-2.3, -2.4], [2.3, -2.4], [-2.4, 1.6]]) { V.small(tx, 0, tz, 'gold', 0.55, 0.35, 0.4); V.small(tx, 0.35, tz, 'gold', 0.35, 0.25, 0.3); }
+    for (const [cx2, cz2] of [[-3, 2], [3, 2], [-3, -3], [3, -3]]) for (let y = 0; y < 4; y++) V.set(cx2, y, cz2, 'sandstone');
+    for (const [lx, lz, sx, sz] of [[-3.5, -0.5, 0.25, 0.25], [4.5, -0.5, 0.25, 0.25], [0.5, -3.5, 0.25, 0.25]]) V.small(lx + (lx < 0 ? 0.35 : -0.35), 2.2, lz, 'lamp', sx, 0.4, sz);
+    if (fresh) V.small(-1.6, 1.8, 3.5, 'lamp', 0.25, 0.4, 0.25), V.small(2.6, 1.8, 3.5, 'lamp', 0.25, 0.4, 0.25);
+    // marco de la entrada
+    for (let y = 0; y < 4; y++) { V.set(-2, y, N + 1, 'sandstone'); V.set(2, y, N + 1, 'sandstone'); }
+    for (let x = -2; x <= 2; x++) V.set(x, 3, N + 1, fresh ? 'gold' : 'sandDirty');
+    if (!roofOk) V.set(0, N, 0, 'cobble'); else V.set(0, N, 0, fresh ? 'gold' : 'sandstone'); // punta
+    win(-4, 3, 4); win(4, 3, 4); win(-4, 3, -4); win(4, 3, -4); // ductos de aire
+    // afuera: arena, obeliscos, palmeras y esfinge
+    V.small(0.5, -0.03, 0.5, 'sand', 26, 0.05, 26);
+    for (const ox of [-4, 4]) { for (let y = 0; y < 5; y++) V.small(ox + 0.5, y, N + 3.5, fresh ? 'sandstone' : 'sandDirty', 0.7 - y * 0.06, 1, 0.7 - y * 0.06); V.small(ox + 0.5, 5, N + 3.5, 'gold', 0.4, 0.4, 0.4); }
+    for (const [px, pz] of [[-11, 8], [10, -6], [-10, -8]]) { for (let y = 0; y < 5; y++) V.small(px + 0.5 + y * 0.12, y, pz + 0.5, 'log', 0.45, 1, 0.45); for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7, 0.7], [-0.7, -0.7]]) V.small(px + 1.1 + dx * 0.9, 5, pz + 0.5 + dz * 0.9, 'leaves', 1.2 * (dx ? 1 : 0.5) + 0.3, 0.15, 1.2 * (dz ? 1 : 0.5) + 0.3); }
+    const sx0 = -9.5, sz0 = 0; // esfinge recostada mirando hacia el frente
+    V.small(sx0, 0, sz0, outer, 1.6, 1, 3); V.small(sx0, 1, sz0 + 1.2, outer, 1.2, 1.2, 1.1); V.small(sx0, 1.4, sz0 + 1.85, outer, 0.8, 0.8, 0.3);
+    V.small(sx0, 1.9, sz0 + 1.2, 'blue', 1.4, 0.35, 1.3); for (const dx of [-0.45, 0.45]) V.small(sx0 + dx, 0, sz0 + 2.1, outer, 0.45, 0.4, 1.2);
+    doorAt = { x: 0, z: N, w: 3, h: 3 }; top = N + 2;
   } else if (type === 'iglu') {
     for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) for (let y = 0; y <= 5; y++) {
       const d = Math.hypot(x, y * 1.05, z); if (d > 5.4 || d < 4.4) continue;
@@ -3499,8 +3526,8 @@ function buildVoxelHouse(V, type) {
   if (owns('resbalin')) { for (let i = 0; i < 3; i++) V.set(-11, i, 2 + i, 'plank'); for (let i = 0; i < 4; i++) V.small(-10.5, 2.6 - i * 0.7, 5.5 + i, 'red', 1, 0.15, 1); }
   if (owns('fuente')) { V.box(-8, 0, 8, -6, 0, 10, 'stone', true); V.small(-6.5, 0, 9.5, 'water', 0.95, 0.9, 0.95); V.small(-6.5, 0.9, 9.5, 'stone', 0.3, 1.2, 0.3); V.small(-6.5, 2.1, 9.5, 'water', 0.7, 0.3, 0.7); }
   if (owns('auto')) { const cx2 = 9, cz2 = 10.5; V.small(cx2, 0.35, cz2, 'red', 2.6, 0.8, 1.3); V.small(cx2 - 0.2, 1.15, cz2, 'glass', 1.3, 0.6, 1.2); for (const [dx, dz] of [[-0.85, -0.66], [0.85, -0.66], [-0.85, 0.66], [0.85, 0.66]]) V.small(cx2 + dx, 0, cz2 + dz, 'black', 0.55, 0.55, 0.16); V.small(cx2 + 1.32, 0.5, cz2 - 0.4, 'lamp', 0.05, 0.2, 0.25); V.small(cx2 + 1.32, 0.5, cz2 + 0.4, 'lamp', 0.05, 0.2, 0.25); }
-  if (owns('piscina')) for (let x = 6; x <= 11; x++) for (let z = 1; z <= 5; z++) {
-    const edge = x === 6 || x === 11 || z === 1 || z === 5;
+  if (owns('piscina')) for (let x = 8; x <= 12; x++) for (let z = 1; z <= 5; z++) { // a la derecha (no choca con ningún hogar)
+    const edge = x === 8 || x === 12 || z === 1 || z === 5;
     V.small(x + 0.5, 0, z + 0.5, edge ? 'white' : 'water', 1, edge ? 0.4 : 0.3, 1);
   }
   if (owns('estatua')) { V.set(6, 0, 8, 'stone'); V.small(6.5, 1, 8.5, 'gold', 0.3, 0.7, 0.3); V.small(6.5, 1.7, 8.5, 'gold', 1.1, 0.9, 1.1); V.small(5.85, 1.95, 8.5, 'gold', 0.2, 0.5, 0.2); V.small(7.15, 1.95, 8.5, 'gold', 0.2, 0.5, 0.2); }
