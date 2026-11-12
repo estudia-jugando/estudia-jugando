@@ -620,18 +620,18 @@ async function cloudLoad() {
     for (const k in (ud.best || {})) best[k] = Math.max(best[k] || 0, ud.best[k]);
     store.set('ej_best', best);
     if (ud.story) { // modo historia: se junta lo de la nube con lo de este dispositivo
-      const cs = ud.story;
-      if ((cs.resetAt || 0) !== (STORY.resetAt || 0)) {
+      const cs = ud.story, R = STORY_REAL; // siempre se junta con el progreso real (no con la casa de prueba del modo creador)
+      if ((cs.resetAt || 0) !== (R.resetAt || 0)) {
         // alguien empezó de cero: manda la versión con el reinicio más reciente
-        if ((cs.resetAt || 0) > (STORY.resetAt || 0)) Object.assign(STORY, cs);
+        if ((cs.resetAt || 0) > (R.resetAt || 0)) Object.assign(R, cs);
       } else {
-        STORY.coins = Math.max(STORY.coins || 0, cs.coins || 0);
-        STORY.owned = [...new Set([...(cs.owned || []), ...STORY.owned])];
-        STORY.house = cs.house || STORY.house;
-        STORY.zones = Object.assign({}, STORY.zones, cs.zones || {});
-        STORY.lastDay = [STORY.lastDay, cs.lastDay].filter(Boolean).sort().pop() || null;
+        R.coins = Math.max(R.coins || 0, cs.coins || 0);
+        R.owned = [...new Set([...(cs.owned || []), ...R.owned])];
+        R.house = cs.house || R.house;
+        R.zones = Object.assign({}, R.zones, cs.zones || {});
+        R.lastDay = [R.lastDay, cs.lastDay].filter(Boolean).sort().pop() || null;
       }
-      store.set('ej_story', STORY);
+      store.set('ej_story', R);
     }
     SUBJECTS = merged;
     CUR = SUBJECTS.find(s => s.id === ud.current) || SUBJECTS.find(s => s.id === CUR.id) || SUBJECTS[0];
@@ -652,7 +652,7 @@ async function cloudSaveNow() {
   setSync('⏳ Guardando…');
   try {
     const uref = fdb.collection('users').doc(fbUser.uid), batch = fdb.batch(), now = Date.now();
-    batch.set(uref, { name: fbUser.displayName || '', current: CUR.id, best: store.get('ej_best', {}), story: STORY, updated: now }, { merge: true });
+    batch.set(uref, { name: fbUser.displayName || '', current: CUR.id, best: store.get('ej_best', {}), story: STORY_REAL, updated: now }, { merge: true });
     SUBJECTS.forEach((s, i) => batch.set(uref.collection('subjects').doc(s.id),
       { id: s.id, name: s.name, notes: (s.notes || '').slice(0, 300000), questions: s.questions, order: i, updated: now }));
     deletedIds.forEach(id => batch.delete(uref.collection('subjects').doc(id)));
@@ -769,7 +769,7 @@ function renderQuestions() {
   $('#qdetails').style.display = n ? '' : 'none';
   $('#qlist').innerHTML = QUESTIONS.map((q, i) =>
     `<div class="qitem"><span>${esc(q.q).replace(/\n/g, '<br>')}<br><em>✔ ${esc(q.options[q.answer])}</em></span><button data-del="${i}" title="Eliminar">✕</button></div>`).join('');
-  try { $('#storyInfo').textContent = `🪙 ${STORY.coins} fichas · 🏠 ${housePct()}% de tu casa`; } catch (e) {}
+  try { $('#storyInfo').textContent = `🪙 ${coinsText()} fichas · 🏠 ${housePct()}% de tu casa`; } catch (e) {}
   const best = store.get('ej_best', {});
   document.querySelectorAll('[data-best]').forEach(el => { const b = best[el.dataset.best]; el.textContent = b ? `🏆 Récord: ${b}` : ''; });
 }
@@ -987,7 +987,7 @@ function endGame(g, title) {
   $('#endTitle').textContent = title;
   $('#endScore').textContent = g.score; $('#endOk').textContent = g.ok; $('#endBad').textContent = g.bad;
   $('#endBest').textContent = g.score > prev ? '🏆 ¡Nuevo récord!' : `Récord: ${prev}`;
-  $('#endCoins').textContent = STORY_RUN ? `🪙 +${coins} fichas para tu casa${g.dailyBonus ? ` (incluye 🎁 bono diario +${g.dailyBonus})` : ''} · tienes ${STORY.coins}` : '';
+  $('#endCoins').textContent = STORY_RUN ? `🪙 +${coins} fichas para tu casa${g.dailyBonus ? ` (incluye 🎁 bono diario +${g.dailyBonus})` : ''} · tienes ${coinsText()}` : '';
   $('#menuBtn').textContent = STORY_RUN ? '🗺️ Volver al mapa' : 'Volver al menú';
   $('#endModal').classList.add('on');
 }
@@ -2898,7 +2898,16 @@ GAMES.trap = class {
 
 /* ============ MODO HISTORIA: mapa, fichas y tu casa ============ */
 let STORY = Object.assign({ house: null, coins: 0, owned: [], zones: {} }, store.get('ej_story', {}));
-const saveStory = () => { store.set('ej_story', STORY); cloudSave(); };
+// MODO CREADOR: se activa con ?creador=1 en el link (y se apaga con ?creador=0).
+// Usa una casa de prueba con fichas infinitas que NO se guarda: tu progreso real queda intacto.
+(() => { try { const q = new URLSearchParams(location.search).get('creador'); if (q === '1') localStorage.setItem('ej_creator', '1'); if (q === '0') localStorage.removeItem('ej_creator'); } catch (e) {} })();
+const CREATOR = (() => { try { return localStorage.getItem('ej_creator') === '1'; } catch (e) { return false; } })();
+let STORY_REAL = STORY; // lo que se guarda de verdad
+if (CREATOR) STORY = Object.assign(JSON.parse(JSON.stringify(STORY)), { coins: 999999 });
+const saveStory = () => { if (CREATOR) { STORY.coins = 999999; return; } store.set('ej_story', STORY); cloudSave(); };
+const coinsText = () => CREATOR ? '∞' : STORY.coins;
+if (CREATOR) document.body.insertAdjacentHTML('beforeend',
+  '<div style="position:fixed;left:10px;bottom:10px;z-index:40;background:#ffb547;color:#1b1e2b;border-radius:10px;padding:6px 10px;font:600 13px system-ui;box-shadow:0 2px 10px #0006">🛠️ Modo creador · fichas ∞ · casa de prueba (no se guarda) · <a href="?creador=0" style="color:#1b1e2b">Salir</a></div>');
 const HOUSES = [
   { id: 'casa', name: 'Casa', icon: '🏡' }, { id: 'castillo', name: 'Castillo', icon: '🏰' },
   { id: 'piramide', name: 'Pirámide', icon: '🔺' }, { id: 'iglu', name: 'Iglú', icon: '❄️' }, { id: 'arbol', name: 'Casa del árbol', icon: '🌳' }
@@ -3111,7 +3120,7 @@ GAMES.world = class {
     this.renderPanel();
   }
   stop() { const el = $('#storyPanel'); el.style.display = 'none'; el.style.top = ''; el.style.bottom = ''; }
-  hud() { return `<span>🗺️ Modo Historia</span><span>🪙 ${STORY.coins} fichas</span><span>🏠 ${housePct()}% de tu casa</span>`; }
+  hud() { return `<span>🗺️ Modo Historia</span><span>🪙 ${coinsText()} fichas</span><span>🏠 ${housePct()}% de tu casa</span>`; }
   pos(pl) { return { x: W * pl.x, y: H * pl.y }; }
   enter(pl) {
     if (pl.house) return startGame('house');
@@ -3137,7 +3146,7 @@ GAMES.world = class {
     }
     if (pl.house) {
       const h = HOUSES.find(x => x.id === STORY.house);
-      el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b><br><small>${h ? h.icon + ' ' + h.name + ' · ' + housePct() + '% terminada' : 'Todavía no eliges tu hogar'} · 🪙 ${STORY.coins} fichas</small></div><button class="primary" data-enter>Entrar ▶</button></div>`;
+      el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b><br><small>${h ? h.icon + ' ' + h.name + ' · ' + housePct() + '% terminada' : 'Todavía no eliges tu hogar'} · 🪙 ${coinsText()} fichas</small></div><button class="primary" data-enter>Entrar ▶</button></div>`;
     } else {
       const subj = placeSubject(pl);
       el.innerHTML = `<div class="sp-row"><div><b>${pl.icon} ${pl.name}</b> · <small>${pl.desc}</small><br>
@@ -3216,7 +3225,7 @@ GAMES.house = class {
     this.renderPanel();
   }
   stop() { $('#storyPanel').style.display = 'none'; }
-  hud() { const h = HOUSES.find(x => x.id === STORY.house); return `<span>🪙 ${STORY.coins} fichas</span><span>${h ? h.icon + ' ' + h.name : '🏚️ Elige tu hogar'}</span><span>✨ ${housePct()}% terminada</span>`; }
+  hud() { const h = HOUSES.find(x => x.id === STORY.house); return `<span>🪙 ${coinsText()} fichas</span><span>${h ? h.icon + ' ' + h.name : '🏚️ Elige tu hogar'}</span><span>✨ ${housePct()}% terminada</span>`; }
   renderPanel() { renderShopPanel($('#storyPanel'), this, () => this.renderPanel()); }
 };
 // tienda del hogar (se usa en la casa 2D y en el mundo 3D). ui guarda la pestaña y el aviso; onChange se llama después de cada compra
@@ -3228,7 +3237,7 @@ function renderShopPanel(el, ui, rerender) {
     } else {
       const items = SHOP.filter(i => i.cat === ui.tab);
       el.innerHTML = `<div class="sp-row" style="margin-bottom:8px"><div class="subjects"><button class="subj${ui.tab === 'arreglos' ? ' on' : ''}" data-tab="arreglos">🛠️ Arreglos</button><button class="subj${ui.tab === 'deco' ? ' on' : ''}" data-tab="deco">🌷 Decoración</button></div>
-        <div><b>🪙 ${STORY.coins}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button> <button data-reset style="padding:4px 10px;font-size:12px">🔄 Empezar de cero</button></div></div>
+        <div><b>🪙 ${coinsText()}</b> <button data-change style="padding:4px 10px;font-size:12px">Cambiar de hogar</button> <button data-reset style="padding:4px 10px;font-size:12px">🔄 Empezar de cero</button></div></div>
         <div class="sp-grid">${items.map(i => { const have = owns(i.id), can = STORY.coins >= i.cost;
           return `<button class="sp-item${have ? ' have' : ''}" data-buy="${i.id}" ${have || !can ? 'disabled' : ''}><span class="sp-ico">${i.icon}</span>${i.name}<small>${have ? '✔ Comprado' : '🪙 ' + i.cost}</small></button>`; }).join('')}</div>`;
     }
@@ -3520,7 +3529,7 @@ GAMES.world3d = class {
     this.cv3.style.display = 'none'; const el = $('#storyPanel'); el.style.display = 'none'; el.style.top = ''; el.style.bottom = '';
     if (this.scene) this.scene.traverse(o => { if (o.geometry) o.geometry.dispose(); });
   }
-  hud() { return `<span>🗺️ Modo Historia 3D</span><span>🪙 ${STORY.coins} fichas</span><span>🏠 ${housePct()}% de tu hogar</span>`; }
+  hud() { return `<span>🗺️ Modo Historia 3D</span><span>🪙 ${coinsText()} fichas</span><span>🏠 ${housePct()}% de tu hogar</span>`; }
   // arma todos los bloques como "instancias" (rápido) agrupadas por tipo
   rebuild() {
     while (this.world.children.length) { const o = this.world.children.pop(); if (o.geometry) o.geometry.dispose(); }
