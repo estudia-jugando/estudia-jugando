@@ -60,6 +60,9 @@ code{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:12px}
 .subjtools button{padding:5px 10px;font-size:13px}
 .cur{color:var(--accent)}
 .aibox.first{margin:0 0 16px}
+.ainotice{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.ainotice span{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted)}
+.ainotice b{color:var(--accent)}
 .aibox p{margin:6px 0 10px;color:var(--muted)}
 .aibox pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font:12.5px/1.5 ui-monospace,Consolas,monospace;margin:0 0 10px;max-height:190px;overflow:auto}
 .aibox button{padding:7px 12px;font-size:14px}
@@ -130,7 +133,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 <header>
   <div>
     <h1>Estudia <span>Jugando</span></h1>
-    <p class="sub">Sube tus apuntes, se generan preguntas automáticamente y juegas respondiéndolas.</p>
+    <p class="sub">Sube tus apuntes, crea preguntas con IA y juega respondiéndolas.</p>
   </div>
   <div class="account" id="account">
     <button id="loginBtn" class="primary">🔐 Entrar con Google</button>
@@ -149,7 +152,14 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <h2 style="margin-top:20px">1 · Apuntes de <span id="curName" class="cur"></span></h2>
     <div class="aibox first" style="background:#6ee7a012;border-color:#6ee7a066">
       <b>✨ Generar preguntas con IA (Gemini, gratis)</b>
-      <p>Pega tus apuntes en el cuadro de abajo (o sube el archivo) y la IA crea preguntas de alternativas de verdad, que se suman a la materia elegida. Necesitas iniciar sesión · máximo 5 veces al día.</p>
+      <p>Pega o sube tus apuntes en el cuadro de abajo y la IA crea preguntas de alternativas de verdad, que se suman a la materia elegida.</p>
+      <div class="ainotice">
+        <span>🤖 Usa inteligencia artificial (Gemini de Google)</span>
+        <span>🔐 Requiere iniciar sesión</span>
+        <span>📅 Máximo 5 usos al día · <b id="aiLeft">te quedan 5 hoy</b></span>
+        <span>🌐 Tus apuntes se envían a Google para crear las preguntas</span>
+        <span>⚠️ La IA puede equivocarse: revisa las preguntas</span>
+      </div>
       <div class="row" style="margin-top:0">
         <label class="status">Cantidad: <select id="aiCount" style="background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px"><option>20</option><option selected>40</option><option>60</option></select></label>
         <button class="primary" id="aiGen">✨ Generar con IA</button>
@@ -185,10 +195,12 @@ Reglas:
     </label>
     <textarea id="notes" placeholder="…o pega aquí el texto de tus apuntes."></textarea>
     <div class="row">
-      <button class="primary" id="genBtn">Generar preguntas</button>
-      <button id="demoBtn">Usar apunte de ejemplo</button>
+      <button class="primary" id="aiGen2">✨ Generar con IA</button>
+      <button id="genBtn" title="Rápido y sin límite, pero las preguntas pueden quedar raras">⚙️ Automático (sin IA)</button>
+      <button id="demoBtn">Apunte de ejemplo</button>
       <button id="clearBtn">Borrar</button>
     </div>
+    <p class="tip" style="margin-top:6px">✨ <b>Con IA</b>: preguntas de mejor calidad, se suman a la materia (máx. 5 al día, con sesión iniciada). ⚙️ <b>Automático</b>: sin límite, pero menos preciso y reemplaza las preguntas de la materia.</p>
     <div class="row"><span class="status" id="status"></span></div>
     <details id="qdetails">
       <summary>Ver preguntas generadas</summary>
@@ -760,16 +772,20 @@ function aiErrorText(e) {
   if (/fetch|network|Failed to load|import/i.test(s)) return '⚠️ No se pudo conectar con la IA. Revisa tu internet (o un bloqueador de anuncios).';
   return '⚠️ La IA no pudo generar preguntas: ' + s.slice(0, 140);
 }
+function updateAiLeft() { // cuántos usos de IA quedan hoy
+  const today = new Date().toISOString().slice(0, 10), use = store.get('ej_ai', {}), used = use.day === today ? use.n || 0 : 0;
+  const el = $('#aiLeft'); if (el) el.textContent = CREATOR ? 'modo creador: sin límite' : `te quedan ${Math.max(0, AI_DAILY - used)} hoy`;
+}
 async function aiGenerate() {
   const st = $('#aiStatus'), btn = $('#aiGen'), notes = notesEl.value.trim();
-  const say = (t, cls = '') => { st.textContent = t; st.className = 'status ' + cls; };
+  const say = (t, cls = '') => { st.textContent = t; st.className = 'status ' + cls; setStatus(t, cls); }; // aviso arriba y junto a los botones
   if (!window.firebase || !fbUser) return say('🔐 Inicia sesión con Google (arriba a la derecha) para usar la IA.', 'err');
   if (notes.length < 150) return say('Primero pega o sube tus apuntes en el cuadro de abajo.', 'err');
   const today = new Date().toISOString().slice(0, 10), use = store.get('ej_ai', {});
   if (use.day !== today) { use.day = today; use.n = 0; }
   if (!CREATOR && use.n >= AI_DAILY) return say(`Ya usaste la IA ${AI_DAILY} veces hoy. Mañana puedes de nuevo 🙂`, 'err');
   const n = +$('#aiCount').value || 40;
-  btn.disabled = true; say(`⏳ La IA está leyendo tus apuntes y creando ${n} preguntas… (puede tardar hasta un minuto)`);
+  btn.disabled = true; $('#aiGen2').disabled = true; say(`⏳ La IA está leyendo tus apuntes y creando ${n} preguntas… (puede tardar hasta un minuto)`);
   let text = '', err = null;
   for (const m of AI_MODELS) {
     try {
@@ -782,19 +798,20 @@ async function aiGenerate() {
       say(`⏳ Ese modelo está ocupado, probando otro…`);
     }
   }
-  btn.disabled = false;
+  btn.disabled = false; $('#aiGen2').disabled = false;
   if (!text) return say(aiErrorText(err), 'err');
   const qs = generateQuestions(text).filter(q => q.kind === 'propia');
   if (!qs.length) return say('La IA respondió, pero no en el formato esperado. Intenta de nuevo.', 'err');
   const seen = new Set(QUESTIONS.map(q => q.q.toLowerCase())); let added = 0;
   for (const q of qs) if (!seen.has(q.q.toLowerCase())) { QUESTIONS.push(q); seen.add(q.q.toLowerCase()); added++; }
   CUR.questions = QUESTIONS; deck = []; saveSubjects(); renderQuestions();
-  use.n++; store.set('ej_ai', use);
+  use.n++; store.set('ej_ai', use); updateAiLeft();
   track('ia_preguntas', { cantidad: added });
-  say(`✅ La IA creó ${added} preguntas nuevas en 📁 ${CUR.name} (ahora tiene ${QUESTIONS.length}). Te quedan ${CREATOR ? '∞' : AI_DAILY - use.n} usos hoy.`, 'ok');
-  setStatus(`✅ ${QUESTIONS.length} preguntas listas en 📁 ${CUR.name}. ¡Elige un juego!`, 'ok');
+  say(`✅ La IA creó ${added} preguntas nuevas en 📁 ${CUR.name} (ahora tiene ${QUESTIONS.length}). Te quedan ${CREATOR ? '∞' : AI_DAILY - use.n} usos hoy. ¡Elige un juego!`, 'ok');
 }
 $('#aiGen').onclick = aiGenerate;
+$('#aiGen2').onclick = aiGenerate;
+window.addEventListener('load', updateAiLeft); // al final de la carga (cuando ya existe todo lo demás)
 const closeWelcome = () => { $('#welcomeModal').classList.remove('on'); try { sessionStorage.setItem('ej_welcomed', '1'); } catch (e) {} };
 $('#welcomeGuest').onclick = closeWelcome;
 $('#welcomeLogin').onclick = async () => { closeWelcome(); await login(); };
@@ -883,7 +900,9 @@ async function handleFiles(files) {
     const texts = [];
     for (const f of files) texts.push(await readAny(f));
     notesEl.value = (notesEl.value.trim() ? notesEl.value.trim() + '\n\n' : '') + texts.join('\n\n');
-    generate();
+    CUR.notes = notesEl.value; saveSubjects(); // solo se carga el texto: tú eliges cómo generar las preguntas
+    setStatus('📄 Apunte cargado. Ahora elige: ✨ Generar con IA (recomendado) o ⚙️ automático sin IA.', 'ok');
+    $('#aiGen2').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (e) { setStatus('Error al leer el archivo: ' + e.message, 'err'); }
 }
 const drop = $('#drop');
