@@ -147,8 +147,17 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
       <button id="delSubj">🗑️ Borrar materia</button>
     </div>
     <h2 style="margin-top:20px">1 · Apuntes de <span id="curName" class="cur"></span></h2>
-    <div class="aibox first">
-      <b>🤖 Recomendación: pídele a una IA que te genere las preguntas</b>
+    <div class="aibox first" style="background:#6ee7a012;border-color:#6ee7a066">
+      <b>✨ Generar preguntas con IA (Gemini, gratis)</b>
+      <p>Pega tus apuntes en el cuadro de abajo (o sube el archivo) y la IA crea preguntas de alternativas de verdad, que se suman a la materia elegida. Necesitas iniciar sesión · máximo 5 veces al día.</p>
+      <div class="row" style="margin-top:0">
+        <label class="status">Cantidad: <select id="aiCount" style="background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px"><option>20</option><option selected>40</option><option>60</option></select></label>
+        <button class="primary" id="aiGen">✨ Generar con IA</button>
+      </div>
+      <div class="status" id="aiStatus" style="margin-top:8px"></div>
+    </div>
+    <div class="aibox">
+      <b>🤖 O hazlo tú: pídele a una IA que te genere las preguntas</b>
       <p>Las preguntas automáticas a veces quedan raras. Para mejores preguntas, sube tus apuntes a una IA (Claude, ChatGPT, Gemini…) con este mensaje, copia lo que te responda y pégalo en el cuadro de abajo.</p>
       <pre id="aiPrompt">Actúa como profesor. Con el material que te adjunto, crea 60 preguntas de examen de alternativas en español, variadas (conceptos, fechas, nombres, clasificaciones y ejemplos).
 
@@ -721,6 +730,71 @@ function cloudSave() {
   cloudTimer = setTimeout(cloudSaveNow, 1500);
 }
 window.addEventListener('load', initFirebase);
+
+/* ============ preguntas con IA (Gemini vía Firebase AI Logic: la clave no queda expuesta) ============ */
+const FB_ESM = 'https://www.gstatic.com/firebasejs/12.6.0/';
+// se prueban en orden: si uno no existe o está saturado, se usa el siguiente
+const AI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite'];
+const AI_DAILY = 5;
+let aiCore = null;
+async function aiModel(name) {
+  if (!aiCore) {
+    const A = await import(FB_ESM + 'firebase-app.js'), M = await import(FB_ESM + 'firebase-ai.js');
+    const app = A.getApps().find(a => a.name === 'ia') || A.initializeApp(FB_CONFIG, 'ia');
+    aiCore = { M, ai: M.getAI(app, { backend: new M.GoogleAIBackend() }) };
+  }
+  return aiCore.M.getGenerativeModel(aiCore.ai, { model: name });
+}
+const aiPromptText = n => `Actúa como profesor. Con los apuntes que van al final, crea ${n} preguntas de examen de alternativas en español, variadas (conceptos, fechas, nombres, clasificaciones y ejemplos).
+Escríbelas con este formato exacto, sin numerarlas, sin negritas ni tablas, dejando una línea en blanco entre cada pregunta:
+P: ¿pregunta?
+R: respuesta correcta
+I: alternativa incorrecta 1
+I: alternativa incorrecta 2
+I: alternativa incorrecta 3
+Reglas: cada pregunta lleva 1 respuesta correcta (R) y 3 incorrectas (I) creíbles y del mismo tema; todas cortas (máximo 12 palabras) y de largo parecido; usa solo información de los apuntes; no escribas nada más que las preguntas.`;
+function aiErrorText(e) {
+  const s = String(e && (e.code || e.message) || e);
+  if (/api-not-enabled|not.*enabled|SERVICE_DISABLED|PERMISSION_DENIED|403/i.test(s)) return '⚠️ Falta activar "AI Logic" en el proyecto de Firebase.';
+  if (/quota|429|RESOURCE_EXHAUSTED|rate|high demand|overload|503|unavailable|timeout/i.test(s)) return '⚠️ La IA gratis está muy ocupada o llegó a su límite por ahora. Intenta en unos minutos.';
+  if (/fetch|network|Failed to load|import/i.test(s)) return '⚠️ No se pudo conectar con la IA. Revisa tu internet (o un bloqueador de anuncios).';
+  return '⚠️ La IA no pudo generar preguntas: ' + s.slice(0, 140);
+}
+async function aiGenerate() {
+  const st = $('#aiStatus'), btn = $('#aiGen'), notes = notesEl.value.trim();
+  const say = (t, cls = '') => { st.textContent = t; st.className = 'status ' + cls; };
+  if (!window.firebase || !fbUser) return say('🔐 Inicia sesión con Google (arriba a la derecha) para usar la IA.', 'err');
+  if (notes.length < 150) return say('Primero pega o sube tus apuntes en el cuadro de abajo.', 'err');
+  const today = new Date().toISOString().slice(0, 10), use = store.get('ej_ai', {});
+  if (use.day !== today) { use.day = today; use.n = 0; }
+  if (!CREATOR && use.n >= AI_DAILY) return say(`Ya usaste la IA ${AI_DAILY} veces hoy. Mañana puedes de nuevo 🙂`, 'err');
+  const n = +$('#aiCount').value || 40;
+  btn.disabled = true; say(`⏳ La IA está leyendo tus apuntes y creando ${n} preguntas… (puede tardar hasta un minuto)`);
+  let text = '', err = null;
+  for (const m of AI_MODELS) {
+    try {
+      const model = await aiModel(m);
+      const r = await Promise.race([model.generateContent(aiPromptText(n) + '\n\nAPUNTES:\n' + notes.slice(0, 300000)), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 120000))]);
+      text = r.response.text(); if (text) break;
+    } catch (e) { // modelo inexistente, saturado o lento: probar el siguiente
+      err = e; console.warn('IA', m, e);
+      if (!/not.?found|404|unsupported|not available|no longer available|high demand|overload|503|500|unavailable|timeout/i.test(String(e && e.message || e))) break;
+      say(`⏳ Ese modelo está ocupado, probando otro…`);
+    }
+  }
+  btn.disabled = false;
+  if (!text) return say(aiErrorText(err), 'err');
+  const qs = generateQuestions(text).filter(q => q.kind === 'propia');
+  if (!qs.length) return say('La IA respondió, pero no en el formato esperado. Intenta de nuevo.', 'err');
+  const seen = new Set(QUESTIONS.map(q => q.q.toLowerCase())); let added = 0;
+  for (const q of qs) if (!seen.has(q.q.toLowerCase())) { QUESTIONS.push(q); seen.add(q.q.toLowerCase()); added++; }
+  CUR.questions = QUESTIONS; deck = []; saveSubjects(); renderQuestions();
+  use.n++; store.set('ej_ai', use);
+  track('ia_preguntas', { cantidad: added });
+  say(`✅ La IA creó ${added} preguntas nuevas en 📁 ${CUR.name} (ahora tiene ${QUESTIONS.length}). Te quedan ${CREATOR ? '∞' : AI_DAILY - use.n} usos hoy.`, 'ok');
+  setStatus(`✅ ${QUESTIONS.length} preguntas listas en 📁 ${CUR.name}. ¡Elige un juego!`, 'ok');
+}
+$('#aiGen').onclick = aiGenerate;
 const closeWelcome = () => { $('#welcomeModal').classList.remove('on'); try { sessionStorage.setItem('ej_welcomed', '1'); } catch (e) {} };
 $('#welcomeGuest').onclick = closeWelcome;
 $('#welcomeLogin').onclick = async () => { closeWelcome(); await login(); };
